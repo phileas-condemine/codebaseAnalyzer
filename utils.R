@@ -1,309 +1,472 @@
-library(data.table)
-library(visNetwork)
-library(readxl)
-# FIND DEPENDENCIES AND LOAD THE PKG TO BE ABLE TO "match.call" & "match.fun"
-pkgs = readLines("../sidep/src/00_Actualisation_pcr_sero.R",encoding = "UTF-8")
-pkgs = pkgs[grepl("^library\\(",pkgs)]
-sapply(pkgs, function(x) {
-  eval(parse(text = x))
-})
 
-
-reader_funs = c(
-  "fread"="input",
-  "safe_fread"="input",#fonction non déclarée...
-  "read.csv"="file",
-  "read.csv2"="file",
-  "read.xlsx"="xlsxFile",
-  "read_xlsx"="path",
-  "readLines"="con",
-  "read_delim"="file",
-  "read_excel"="path",
-  "st_read"="dsn",
-  "read_sf"="dsn",
-  "load"="file",
-  "loadWorkbook"="file",
-  "readRDS"="file",
-  "read_fst"="path"
-)
-
-
-get_code = function(filepath,dirpath="../sidep/"){
+error_get_missing_var = function(e, env, missing_vars, verbose = 0) {
   
-  code = readLines(file.path(dirpath,filepath),encoding = "UTF-8")
-  code = gsub("#.*","",code)#rm comments
+  curr_script = get("curr_script",envir=env)
+  dirpath = get("dirpath",envir=env)
+  one_call = get("one_call",envir=env)
+  # print(e)
+  # print("error ! get missing var ?")
+  msg = e$message
+  msg = grep("^objet .* introuvable$",msg,value = T)
+  if(length(msg)>0){
+    missing_var = gsub("(^objet ')|(' introuvable$)","",msg)
+    write(missing_var,file = "all_missing_vars.txt",append = T)
+    
+    message(sprintf("search missing var : %s",missing_var))
+    # print("look for definition in the entire codebase")
+    res_list = get_var_def(
+      scripts = codes_path,
+      my_var = missing_var,
+      env = env,
+      takelast = F,
+      missing_vars = missing_vars,
+      verbose = verbose >0
+    )
+    get_def = res_list[['def']]
+    i = res_list[['i']]
+    # browser()
+    if(!is.null(get_def)){#multiple definitions found !
+      if(length(get_def)>1 & i > 0){
+        # browser()
+        # print("get near-call definition.")
+        n = find_one_call_line(one_call,file.path(dirpath,curr_script))
+        # if(!(length(n)==1 && is.numeric(n)))browser()
+        
+        unnest_source(final_script = curr_script,dirpath = dirpath,
+                      n = n,#a priori on prendrait n-1 mais comme le reader peut être à l'intérieur d'une expression {} il faut récupérer tout le contenu car la définition de la variable peut se trouver dans l'expression
+                      destfile = "tmp.R",verbose = verbose>1)
+        
+        n = find_one_call_line(one_call,"tmp.R")
+        
+        # message(missing_var)
+        res_list = get_var_def(
+          scripts = "tmp.R",
+          my_var = missing_var,
+          env = env,
+          dirpath = ".",
+          takelast = T,
+          missing_vars = missing_vars,
+          verbose = verbose>0
+        )
+      } else if (length(get_def) == 1 | i == 0) {
+        # eval(get_def[[1]],envir = parent.frame())
+        # tryCatch({
+        missing_var_value <-  get(missing_var, envir = env)
+        # }, error = QUE FAUT-IL METTRE ICI ?#function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose) ?
+        # function(e) {
+        #   print("oups, couldn't get the missing var.")
+        #   browser()
+        # }
+        # )
+        if(length(missing_var_value)==0){
+          print(e)
+          assign(missing_var,missing_var,envir=env)#X = "X" so that we know there was a problem !
+          print("couldn't find any value. This may happen with list.files() if not in the prod workdir.")
+        } else if (length(missing_var_value==1)){
+          print(missing_var_value)
+          print("FIXED : missing_var is a vector of length 1 !")
+          # browser()
+        } else if (length(missing_var_value)>1){
+          print(missing_var_value)
+          print("multi-values vector, need to be handled properly !")
+          browser()
+        }
+      }
+      
+    } 
+  } else {
+    assign("had_missing_var_error",F,envir = env)
+  }
+  
+}
+
+
+
+get_code = function(filepath,dirpath="../sidep/",n=-1L,verbose=F){
+  assertthat::assert_that(length(n)==1 && is.numeric(n),msg=sprintf("n devrait être un entier. A la place n vaut %s.",n))
+  code = readLines(file.path(dirpath,filepath),encoding = "UTF-8",n = n,warn = verbose)
+  if(n>0){
+    parsable = F
+  } else {
+    parsable= T
+  }
+  n_init = n
+  while(!parsable){
+    # print(n)
+    code = readLines(file.path(dirpath,filepath),encoding = "UTF-8",n = n,warn = verbose)
+    writeLines(text = c(code, ""),#final empty line
+               con = file("tmp.R", encoding = "UTF-8"))
+    res = NULL
+    try({
+      res = parse(file = file("tmp.R",encoding = "UTF-8"))
+    },silent = T)
+    
+    if(is.null(res)){
+      n = n+1
+      # print(n)
+    } else {
+      parsable = T
+    }
+    
+  }
+  if(n>0 && n!=n_init)print(sprintf("stopped at line %s instead of %s.",n,n_init))
+  
+  # code = gsub("#.*","",code)#Too simple : # can be quoted in 02a
+  code = gsub("^( )*#.*","",code)#rm clean comments on separate lines.
   code = code[code!=""]
   
   code
   
 }
 
-get_sources_path = function(code,path="",verbose=F){
-  sources = grep("source\\(",code,value = T)
-  # x = sources[10]
-  # x = sources[11]
-  sources_path = sapply(sources,function(x){
-    ee <- parse(text = x)[[1]]
-    eefun <- ee[[1]]
-    # L'expression devrait contenir "source"
-    index = which(sapply(ee,function(eee){length(grep(pattern="source",eee))>0}))
-    if(index>1){
-      if(verbose)print("source embedded in other fun calls")
-      ee = lapply(ee,function(eee)if(length(grep(pattern="source",eee))>0)eee else NULL)
-      ee = purrr::compact(ee)
-      x = print(ee[[1]])
-      eefun = parse(text = x)[[1]]
-      ee = x
-    }
-    
-    # get params in fun-call => the fun-call should be "source" & the param is "file".
-    assertthat::assert_that(eefun=="source",msg="On devrait avoir parsé la fonction source")
-    cc <- match.call(match.fun(eefun), ee)
-    filepath = as.list(cc)$file
-    if(verbose)print(filepath)
-    filepath = eval(filepath)
-    if(verbose)print(filepath)
-    filepath
-  })
-  sources_path
-  
-}
 
 
-get_all_sources = function(parentpath = "src/00_Actualisation_pcr_sero.R",verbose=F,dirpath="../sidep/"){
-  if(verbose)print(parentpath)
-  code = get_code(filepath = parentpath,dirpath=dirpath)
-  direct_path = unname(get_sources_path(code))
-  curr_pairs = data.table(parent = parentpath,child = direct_path)
-  
-  if(length(direct_path)>0){
-    rec_pairs = rbindlist(lapply(direct_path,get_all_sources))
-    pairs = rbind(curr_pairs,rec_pairs)
-    
-  } else {
-    pairs = data.table(parent=character(),child=character())
-  }
-  
-  pairs
-}
-
-get_inline_reader_pattern = function(one_reader){
-  paste0("((^)|( )|(::)|(,)|(\\())",one_reader,"((\\()|(\\))|(,)|( )|($))")
-}
-
-get_input_one_call = function(one_call,one_reader,file_arg){
-  print(substr(one_call,1,50))
-  ee = parse(text=one_call)[[1]]
-  eefun <- ee[[1]]
-  inline_reader_pattern = get_inline_reader_pattern(one_reader)#la fonction peut être invoquée avec une parenthèse mais aussi dans un lapply, map... et donc être suivie d'un espace, virgule, parenthèse fermante...
-  i=0
-  x = as.list(ee)[[1]]
-  while(eefun != one_reader){
-    index = which(sapply(ee,function(eee){length(grep(pattern=inline_reader_pattern,eee))>0}))
-    
-    if(any(index==1)){
-      eefun = one_reader
-      
-    } else {
-      eeprev = ee
-      ee = lapply(ee,function(eee)if(length(grep(pattern=inline_reader_pattern,eee))>0)eee else NULL)
-      ee = purrr::compact(ee)
-      
-      ee = parse(text = ee)[[1]]
-      if(ee!=one_reader){
-        eefun = ee[[1]]
-      } else {
-        eefun = ee
-        ee = eeprev
-      }
-    }
-  }
-  
-  
-  assertthat::assert_that(eefun == one_reader,msg="On devrait avoir trouvé notre reader")
-  cc <- match.call(match.fun(eefun), ee)
-  cc_list = as.list(cc)
-  if(!file_arg %in% names(cc_list) && eefun=="safe_fread"){
-    print("arg is not parsed for safe_fread => hardcoded to 1st arg")
-    iopath = cc_list[[2]]
-  } else {
-    iopath = cc_list[[file_arg]]
-  }
-  parsed_fun = cc_list[[1]]
-  print(parsed_fun)
-  if(parsed_fun=="::"){
-    print("package::fun not handled")
-    iopath=NULL
-  } else if ((ee[[2]] == one_reader) & ((ee[[1]] == "<-") | (ee[[1]] == "="))) {
-    print("this is the reader definition")
-    iopath=NULL
-  } else {
-    if(is.null(iopath))browser()
-    try({
-      iopath <- eval(iopath)
-    },silent = T)
-    
-    iopath = deparse(iopath)
-  }
-  iopath
-  
-}
-# filepath = sample(codes_path,1)
-# filepath="src/01_Nettoyage_sidep_pcr - catch warning.R"
-print(filepath)
-tmp = get_inputs(filepath,reader_funs=reader_funs)
-
-
-
-
-get_inside_fun_def = function(one_call){
-  is.call(one_call)
-  if(length(one_call)>=3){
-    fun = one_call[[1]]
-    val = one_call[[3]]
-    if((fun == "=" | fun == "<-") && class(val)=="call" && val[[1]] == "function"){
-      res = val[[3]]# take function definition ...
-      if (res[[1]] == "{"){# ...without {}
-        res = res[-1]
-        sapply(1:length(res), function(i) {
-          res[[i]]
-        })
-      }
-      
-    } else {
-      one_call
-    }
-  } else {
-    one_call
-  }
-}
-
-get_inputs_one_reader = function(one_reader,file_arg,filepath,dirpath="../sidep/"){
-  # one_reader = "read.xlsx"
-  parsed_code = parse(file(file.path(dirpath,filepath),encoding = "UTF-8"))
-  parsed_code = purrr::map(parsed_code,get_inside_fun_def)
-  code = unlist(parsed_code)
-  
-  inline_reader_pattern = get_inline_reader_pattern(one_reader)#la fonction peut être invoquée avec une parenthèse mais aussi dans un lapply, map... et donc être suivie d'un espace, virgule, parenthèse fermante...
-  
-  code = grep(inline_reader_pattern,code,value=T)
-  # code = grep(one_reader,code,value=T)
-  
-  print(sprintf("%s expressions trouvées qui utilisent le reader %s",length(code),one_reader))
-  
-  inputs_one_reader = sapply(code,get_input_one_call,one_reader=one_reader,file_arg=file_arg)
-  
-  inputs_one_reader = unname(inputs_one_reader)
-  
-  
-}
-
-get_inputs_i = function(i,reader_funs,filepath=filepath,dirpath=dirpath){
-  reader = names(reader_funs[i])
-  file_arg = unname(reader_funs[i])
-  get_inputs_one_reader(one_reader = reader,file_arg = file_arg,filepath=filepath,dirpath=dirpath)
-  
-}
-
-
-
-guess_readers = function(filepath,dirpath="../sidep"){
-  src = get_code(filepath,dirpath)
-  readers = unique(stringr::str_extract(src,"([A-z0-9_\\.]*)read([A-z0-9_\\.]*)\\("))
-  readers = readers[!is.na(readers)]
-  readers
-}
-
-
-get_inputs = function(filepath,reader_funs,
-                      dirpath="../sidep") {
-  
-  print("guess readers in file")
-  guessed_readers = guess_readers(filepath,dirpath)
-  print(guessed_readers)
-  
-  inputs = sapply(1:length(reader_funs),get_inputs_i,filepath=filepath,dirpath=dirpath,reader_funs=reader_funs)
-  names(inputs) <- names(reader_funs)
-  inputs = unlist(inputs)
-  if(length(inputs)>0){
-    res = data.table(parent = filepath,child = inputs,group="input",fun=names(inputs))
-  } else {
-    res = NULL
-  }
-  list(guessed_readers = guessed_readers,res=res)
-}
-
-
-code_architecture = get_all_sources(verbose=T)
-dt = code_architecture
-
-codes_path = unique(c(code_architecture$parent,code_architecture$child))
 
 #### FIND VARS DEFINITIONS ###
 
-get_var_def_one_script = function(script,my_var,dirpath){
-  # f = "../sidep/src/01_Nettoyage_sidep_pcr - catch warning.R"
-  print(script)
-  f = file(file.path(dirpath,script),encoding="UTF-8")
-  sc = CodeDepends::readScript(f)
-  vars_definitions = sc@.Data
-  vars_definitions = purrr::keep(vars_definitions, function(x) {
-    if(length(x)>1){
-      x[[2]] == my_var
-    } else F
+base_types = c("name","character","numeric","logical","integer")
+
+get_var_def_one_call = function(one_call,my_var,verbose=F){
+  if(length(one_call) > 1 && ((one_call[[1]] == "=") | (one_call[[1]] == "<-")) && (one_call[[2]] == my_var)){
+    if(verbose)print("found one definition !")
+    
+    return(one_call)
+  }
+  
+  if(length(one_call) > 1 && (one_call[[1]] == "for") && (one_call[[2]] == my_var)){
+    if(verbose)print("found one \"for\" definition !")
+    
+    res1 = parse(text = paste0(one_call[[2]]," = ",one_call[[3]]))#rebuild for(x in X) as x = X 
+    
+    sub_item = one_call[[4]]
+    if(class(sub_item)=="{"){
+      sub_item = sub_item[-1]
+      sub_item = sapply(1:length(sub_item), function(i) {
+        sub_item[[i]]
+      })
+    }
+    res <- lapply(sub_item,get_var_def_one_call,my_var=my_var,verbose=verbose)
+    
+    return(list(res1,res))
+  }
+  
+  
+  
+  
+  i=0
+  i=i+1
+  lapply(1:length(one_call),function(i){
+    if(verbose){
+      print(one_call)
+      print(i)
+      print(length(one_call))
+    }
+    if(rlang::is_symbol(one_call) & length(one_call) == 1){
+      sub_item = one_call
+    } else {
+      sub_item = one_call[[i]]
+    }
+    
+    if(rlang::is_missing(sub_item) || is.null(sub_item) || class(sub_item)%in%base_types){
+      if(verbose)print("cas de base")
+      res = NULL
+    } else if (class(sub_item) %in% c("call","=","<-")){
+      if(verbose){
+        print("call case")
+        print(length(sub_item))
+        print(sapply(sub_item,class))
+        print(class(sub_item))
+      }
+      
+      
+      tryCatch({
+        res <- get_var_def_one_call(sub_item,my_var = my_var,verbose=verbose)
+      },error=function(e){browser()})
+      
+      
+      
+      
+    } else if(class(sub_item)=="{"){
+      if(verbose)print("bracket case")
+      # browser()
+      sub_item = sub_item[-1]
+      sub_item = sapply(1:length(sub_item), function(i) {
+        sub_item[[i]]
+      })
+      
+      # res = c()
+      # for (j in 1:length(sub_item)){
+      #   res = c(res,get_var_def_one_call(sub_item[[j]],my_var = my_var))
+      # }
+      tryCatch({
+        res <- lapply(sub_item,get_var_def_one_call,my_var=my_var,verbose=verbose)
+      },error=function(e){browser()})
+      
+      
+    } else {
+      if(verbose){
+        print("else case")
+        print(length(sub_item))
+        print(class(sub_item))
+        print(sapply(sub_item,class))
+      }
+      
+      tryCatch({
+        res <- get_var_def_one_call(sub_item,my_var = my_var,verbose=verbose)
+        # res <- lapply(sub_item,get_var_def_one_call,my_var=my_var)
+      },error=function(e){browser()})
+      
+      
+    }
+    return(unlist(res))
   })
+}
+
+get_var_def_one_script = function(script,my_var,dirpath,verbose=F){
+  # f = "../sidep/src/01_Nettoyage_sidep_pcr - catch warning.R"
+  if(verbose)print(script)
+  f = file(file.path(dirpath,script),encoding="UTF-8")
+  tryCatch({sc <- parse(file=f)},
+           error=function(e){
+             print(sprintf("couldn't parse file %s",script))
+             
+             print(length(readLines(f)))
+             
+             browser()
+           })
+  
+  
+  vars_definitions = lapply(sc,get_var_def_one_call,my_var=my_var,verbose=verbose)
+  vars_definitions = purrr::compact(vars_definitions)
+  # one_call = sc[[1]]
+  # class(sc)
+  # class(sc[[1]])
+  # 
+  # sc = CodeDepends::readScript(f)
+  # vars_definitions = sc@.Data
+  # 
+  # lapply(vars_definitions,function(x)x[[2]])
+  # vars_definitions = purrr::keep(vars_definitions, function(x) {
+  #   if(length(x)>1){
+  #     x[[2]] == my_var
+  #   } else F
+  # })
   vars_definitions
 }
 
-get_var_def = function(scripts,my_var,dirpath="../sidep",env=parent.frame()){
-  res = lapply(scripts,get_var_def_one_script,my_var=my_var,dirpath=dirpath)
+get_var_def = function(scripts,
+                       my_var,
+                       dirpath = "../sidep",
+                       env = parent.frame(),
+                       takelast = T,
+                       verbose = 0,
+                       missing_vars = list()) {
+  res = lapply(scripts,get_var_def_one_script,my_var=my_var,dirpath=dirpath,verbose=verbose>1)
   names(res) <- scripts
-  res = purrr::compact(res)
+  res = unlist(res)
   
-  if(length(unique(unlist(res)))==1){
-    res = res[[1]][[1]]
-    eval(res,envir = env)
-  } else {
-    stop("Plusieurs définitions différentes, il faut choisir la bonne !")
+  if(length(missing_vars)>0){
+    print(sprintf("Loading vars %s",paste(names(missing_vars),collapse=", ")))
+    list2env(missing_vars,envir = environment())
   }
-  invisible(res)
+  
+  print(sprintf("Found %s definition for %s",length(unique(res)),my_var))
+  if(length(unique(unlist(res))) >= 1 ){
+    
+    # if(my_var=="liste_fichiers")browser()
+    
+    # Attention aux définitions de X qui nécessitent une initialisation (X<-f(X))
+    # => on remonte à la première définition qui ne dépend pas de X et on fait tourner les suivantes.
+    # Si on a dû remonter jusqu'à la première, alors on bypass le param takelast 
+    
+    res
+    i = length(res)
+    # i = i-1
+    need_self = 1
+    while(i>0 & need_self == 1){
+      my_expr = res[[i]]
+      here = environment()
+      tryCatch({
+        eval(my_expr)
+        need_self = -1
+      },error=function(e){
+        msg = e$message
+        msg = grep("^objet .* introuvable$",msg,value = T)
+        if(length(msg)>0){
+          missing_var = gsub("(^objet ')|(' introuvable$)","",msg)
+          # browser()
+          if(missing_var != my_var){
+            message(sprintf("Need %s to eval %s",missing_var,my_var))
+            assign("need_self",0,envir = here)
+          }
+        }
+      })
+      i = i-1
+    }
+    
+    if(i==0 & need_self == 1){
+      print("on n'a pas trouvé de définition sans auto-référence")
+      browser()
+    } 
+    
+    
+    if(takelast | i==0){
+      res = res[(i+1):length(res)]
+    }
+    if(length(unique(res))==1){
+      res = res[1]
+    }
+    
+    
+    if(takelast | i==0 | length(res)==1){
+      for(k in 1:length(res)){
+        print(sprintf("Evaluation de l'expression %s / %s pour récupérer la variable %s.",k,length(res),my_var))
+        had_error = T
+        iter = 0
+        while(iter < 5 && had_error){#can handle 5 params at most
+          print(sprintf("Trial n° %s to get the actual path",iter))
+          
+          if(iter == 4){
+            print(k)
+            print(res[[k]])
+            browser()
+            debugonce(error_get_missing_var)
+            debugonce(get_var_def)
+          }
+          
+          tryCatch({
+            eval(res[[k]])
+            assign(my_var,get(my_var),envir = env)
+            had_error = F
+            
+          }, 
+          error = function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose)
+          )
+          
+          if(had_error){
+            tryCatch({
+              print(sprintf("try again to evaluate var %s",my_var))
+              eval(res[[k]],envir = env)#this time the vars should be available in env !
+              assign(my_var,get(my_var,envir = env),envir = here)#get it from the env to here
+              had_error = F
+            }, 
+            error = function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose)
+            )
+          }
+          
+          
+          iter = iter+1
+        }
+        
+        
+        
+      }
+      if(verbose>1)print("=> done !")
+      
+    } else {
+      if(verbose>1)print("Plusieurs définitions différentes, il faut choisir la bonne ! Choisir takelast = TRUE pour utiliser la dernière définition.")
+    }
+    # browser()
+  } else {
+    res=NULL
+    message(sprintf("Aucune définition trouvée pour %s",my_var))
+    def = paste(text=paste0(my_var," = ",my_var))
+    eval(def,envir=env)
+    # browser()
+  } 
+  invisible(list(def=res,i=i))
 }
 
 
-my_var="safe_fread"
-get_var_def(scripts = codes_path,my_var = my_var)
-
-
-
-filepath = sample(codes_path,1)
-
-####### tmp ########
-tmp = get_inputs(filepath,reader_funs=reader_funs)
-
-inputs = lapply(codes_path,get_inputs,reader_funs=reader_funs)
-
-guessed_readers = lapply(inputs,function(x)x$guessed_readers)
-guessed_readers = unlist(guessed_readers)
-guessed_readers = unique(guessed_readers)
-guessed_readers
-
-
-all_inputs = rbindlist(lapply(inputs,function(x)x$res))
-
-
-create_network = function(dt){
-  assertthat::assert_that(all(c("parent","child")%in%names(dt)))
-  nodes = data.table(title = unique(c(dt$parent,dt$child)))
-  nodes$id = 1:nrow(nodes)
-  edges = copy(dt)
-  edges[nodes,from:=i.id,on=c("parent"="title")]
-  edges[nodes,to:=i.id,on=c("child"="title")]
-  visNetwork(nodes, edges, width = "100%")
+get_inline_io_fun_pattern = function(io_fun){
+  paste0("((^)|( )|(::)|(,)|(\\())",io_fun,"((\\()|(\\))|(,)|( )|($))")
 }
 
 
+standardize_code = function(code){
+  code = gsub(" ","",code)
+  # code = gsub("\n","",code)
+  code
+}
 
-# UNNEST THE WHOLE CODE =>
-# LOOK FOR DEFINITION OF THE OBJECT WE MISS =>
-# GET THE LAST BEFORE SOURCE/I/O BECAUSE IT MAY CHANGE
+
+find_one_call_line = function(one_call,curr_script){
+  code = readLines(curr_script,encoding = "UTF-8")
+  std_call = standardize_code(one_call)
+  std_call = strsplit(std_call,split = "\n",fixed = T)[[1]]
+  code = standardize_code(code)
+  res = grep(std_call[1],code,fixed = T)
+  if(length(res) == 0){
+    matching_call = std_call[1]
+    # compact_code = paste(code,collapse="")
+    # res = grep(matching_call,compact_code,fixed = T)
+    size_expr = nchar(matching_call)
+    print(size_expr)
+    while(length(res)==0 && size_expr>4){
+      size_expr = size_expr-1
+      matching_call = substr(matching_call,1,size_expr)
+      res = grep(matching_call,code,fixed = T)
+    }
+    if(length(res)>0){
+      print(sprintf("On a finalement réduit la première ligne du call aux %s premiers chars.",size_expr))
+    }
+    
+  } 
+  if(length(res) == 0){
+    print("on n'a pas réussi à retrouver one_call dans curr_script...")
+    print(one_call)
+    print(curr_script)
+    browser()
+    
+  } else {
+    if(length(std_call)==1 & length(res) == 1){
+      #cas facile
+      res
+    } else if(length(res) == 1) {
+      print("pour bien faire il faut vérifier que les lignes suivantes matchent !")
+      res
+    } else if (length(std_call) == 1){
+      print("Plusieurs candidats mais on a déjà matché au mieux donc on prend la première expression. Cette méthode peut posser problème si la variable est definie/filtrée/nettoyée en plusieurs étapes !")
+      res = res[1]
+    } else {
+      print("ici une erreur est probable, il vaut mieux affiner en matchant le one_call complet.")
+      call_compact = paste(std_call,collapse="")
+      ok_candidates = c()
+      i=0
+      i=i+1
+      for (i in 1:length(res)){
+        if (i == length(res)){
+          endline = length(code)
+        } else {
+          endline = res[i+1]-1L
+        }
+        startline = res[i]
+        
+        sub_code_compact = paste(code[startline:endline],collapse="")
+        
+        if(grepl(call_compact,sub_code_compact,fixed = T)){
+          ok_candidates = c(ok_candidates,res[i])
+        }
+        
+      }
+      
+      if(length(ok_candidates)==0){
+        print("aucun ne matche...")
+        browser()
+      } else if (length(ok_candidates)==1){
+        print("on a trouvé le bon !")
+        res = res[ok_candidates]
+      } else {
+        print("il y a toujours plusieurs candidats !")
+        browser()
+      }
+      
+      # code[res:(res+length(std_call)-1)]
+      # res = res[1]
+    }
+  }
+  res
+}
+
+
 
