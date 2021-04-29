@@ -47,38 +47,8 @@ get_all_sources = function(parentpath = "src/00_Actualisation_pcr_sero.R",verbos
   pairs
 }
 
-unnest_funs_in_script = function(filepath,
-                       destfile,
-                       funs_defs){
-  
-    OK = F  
-    try({
-      parsed_code <- parse(filepath)
-      OK = T
-    },silent = T)
-    if(!OK){
-      parsed_code <- parse(file(filepath,encoding = "UTF-8"))
-    }
-    
-    code = deeply_unnest_fun_call(parsed_code,funs_defs = funs_defs)
-    
-    char_code = deparse(code)
-    
-    if(char_code[length(char_code)] != ""){
-      char_code = c(char_code,"")
-    }
-    writeLines(text = char_code,con = destfile)
-    
-  
-}
-  
-unnest_source = function(mainfile = "src/00_Actualisation_pcr_sero.R",
-                         dirpath = "../sidep/",
-                         final_script = NULL,
-                         n = -1L,
-                         path = "../sidep/",
-                         verbose = F,
-                         destfile = NULL) {
+
+unnest_source = function(mainfile="src/00_Actualisation_pcr_sero.R",dirpath="../sidep/",final_script=NULL,n=-1L,path="../sidep/",verbose=F,destfile = NULL){
   if(!is.null(final_script) && mainfile == final_script){
     code = get_code(mainfile,dirpath,n=n,verbose=verbose)
   } else {
@@ -123,23 +93,16 @@ unnest_source = function(mainfile = "src/00_Actualisation_pcr_sero.R",
     has_source = (length(sources_loc)>0)
     i=i+1
   }
-  
-
-  
   if(verbose)print(length(code))
   if (!is.null(destfile)){
     # browser()
     # f = file(destfile, encoding = "UTF-8")
-    if(code[length(code)] != ""){
-      code = c(code,"")
-    }
-    writeLines(text = code,con = destfile)
+    writeLines(text = c(code, ""),#final empty line
+               con = destfile)
     # close.connection(f)
   }
   invisible(code)
 }
-
-
 
 
 find_funs_defs = function(full_code_path = "full_code.R"){
@@ -160,130 +123,6 @@ find_funs_defs = function(full_code_path = "full_code.R"){
   }
   names(res)
   return(res)
-}
-
-fun_def = funs_defs[[sample(length(funs_defs),1)]]
-one_call = fun_def[[sample(length(fun_def),1)]]
-
-expr_has_custom_fun = function(expressions,funs_defs){
-  if(length(expressions) > 1){
-    if((expressions[[1]] == "for") && (expressions[[2]] == my_var)){
-      sub_item = expressions[[4]]
-      if(class(sub_item)=="{"){
-        sub_item = sub_item[-1]
-        sub_item = sapply(1:length(sub_item), function(i) {
-          sub_item[[i]]
-        })
-      }
-      return(one_call_has_custom_fun(sub_item,funs_defs=funs_defs))
-    }
-    if(!is.null(funs_defs) && (class(expressions)=="call" & as.character(expressions[[1]]) %in% names(funs_defs))){
-      return(T)
-    }
-  }
-  lapply(1:length(expressions),function(i){
-    if(rlang::is_symbol(expressions) & length(expressions) == 1){
-      return(F)
-    } else {
-      sub_item = expressions[[i]]
-    }
-    if(rlang::is_missing(sub_item) || is.null(sub_item) || class(sub_item)%in%base_types){
-      return(F)
-    } else if (class(sub_item) %in% c("call","=","<-")){
-      return(one_call_has_custom_fun(sub_item,funs_defs=funs_defs))
-    } else if(class(sub_item)=="{"){
-      sub_item = sub_item[-1]
-      sub_item = sapply(1:length(sub_item), function(i) {
-        sub_item[[i]]
-      })
-      return(one_call_has_custom_fun(sub_item,funs_defs=funs_defs))
-    } else {
-      tryCatch({
-        return(one_call_has_custom_fun(sub_item,funs_defs=funs_defs))
-      },
-      error = function(e) {
-        print("exception in one_call_has_custom_fun")
-        browser()
-      })
-    }
-  })
-}
-
-
-unnest_fun_call = function(expressions,funs_defs){
-  
-  if(!is.null(funs_defs) && (class(expressions)=="call" & as.character(expressions[[1]]) %in% names(funs_defs))){
-    
-    fun_name = as.character(expressions[[1]])
-    nms = names(expressions)
-    params_loc = which(nms!="")
-    if(length(params_loc)>0){
-      params = lapply(params_loc,function(i){
-        var = nms[i]
-        val = paste(deparse(expressions[[i]]),collapse="")
-        tryCatch({parse(text=paste0(var," = ",val))},error=function(e){
-          print("oups var = val incorrect")
-          browser()
-        })
-      })
-    } else {
-      params = NULL
-    }
-    fun_expr = funs_defs[[fun_name]]
-    new_item = c(params,fun_expr)
-    assertthat::assert_that(length(params) + length(fun_expr) == length(new_item),msg="On attend F(X=x,Y=y) avec F(X,Y){expr1;expr2} => list(X=x,Y=y,expr1,expr2)")
-    new_item
-  } else expressions
-}
-
-deeply_unnest_fun_call = function(expressions,funs_defs){
-  
-  if(length(expressions) > 1){
-    if((expressions[[1]] == "for") && (expressions[[2]] == my_var)){
-      sub_item = expressions[[4]]
-      if(class(sub_item)=="{"){
-        sub_item = sub_item[-1]
-        sub_item = sapply(1:length(sub_item), function(i) {
-          sub_item[[i]]
-        })
-      }
-      return(deeply_unnest_fun_call(sub_item,funs_defs=funs_defs))
-    }
-    if(!is.null(funs_defs) && (class(expressions)=="call" & as.character(expressions[[1]]) %in% names(funs_defs))){
-      # print("Boom, unnested one fun_call !")
-      return(unnest_fun_call(expressions,funs_defs=funs_defs))
-    }
-  }
-  lapply(1:length(expressions),function(i){
-    if(rlang::is_symbol(expressions) & length(expressions) == 1){
-      return(expressions)
-    } else {
-      sub_item = expressions[[i]]
-      if(class(expressions[[i]]) == "name" && expressions[[i]] == ""){
-        return(expressions)
-      }
-    }
-    if(rlang::is_missing(sub_item) || is.null(sub_item) || class(sub_item)%in%base_types){
-      return(sub_item)
-    } else if (class(sub_item) %in% c("call","=","<-")){
-      return(deeply_unnest_fun_call(sub_item,funs_defs=funs_defs))
-    } else if(class(sub_item)=="{"){
-      sub_item = sub_item[-1]
-      sub_item = sapply(1:length(sub_item), function(i) {
-        sub_item[[i]]
-      })
-      return(deeply_unnest_fun_call(sub_item,funs_defs=funs_defs))
-    } else {
-      tryCatch({
-        return(deeply_unnest_fun_call(sub_item,funs_defs=funs_defs))
-      },
-      error = function(e) {
-        print("exception in deeply_unnest_fun_call")
-        browser()
-      })
-    }
-  })
-  
 }
 
 

@@ -61,16 +61,8 @@ get_var_def(scripts = codes_path,my_var = my_var)
 
 
 unnest_source(destfile = "full_code.R")
+
 funs_defs = find_funs_defs()
-
-# need_to_be_unnested = fun_has_nested_custom_fun(funs_defs,funs_defs)
-need_to_be_unnested = expr_has_custom_fun(funs_defs,funs_defs)
-need_to_be_unnested = sum(unlist(need_to_be_unnested))
-assertthat::assert_that(need_to_be_unnested==0,msg="Si on a des custom_functions imbriquées, il faut définir une fonction pour les dépiler complètement (unnest_funs_defs)")
-
-unnest_funs_in_script(filepath = "full_code.R",destfile = "full_code_unnest_fun_calls.R",funs_defs=funs_defs)
-
-
 
 filepath = sample(codes_path,1)
 

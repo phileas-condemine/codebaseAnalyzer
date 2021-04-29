@@ -30,16 +30,13 @@ error_get_missing_var = function(e, env, missing_vars, verbose = 0,funs_defs) {
       if(length(get_def)>1 & pos_non_autoref > 0){
         # browser()
         # print("get near-call definition.")
-        # n = find_one_call_line(one_call,file.path(dirpath,curr_script))
-        n = find_one_call_line(one_call,"full_code_unnest_fun_calls.R")
+        n = find_one_call_line(one_call,file.path(dirpath,curr_script))
         # if(!(length(n)==1 && is.numeric(n)))browser()
         
         unnest_source(final_script = curr_script,dirpath = dirpath,
                       n = n,#a priori on prendrait n-1 mais comme le reader peut être à l'intérieur d'une expression {} il faut récupérer tout le contenu car la définition de la variable peut se trouver dans l'expression
                       destfile = "tmp.R",verbose = verbose>1)
-        unnest_funs_in_script(filepath = "tmp.R",
-                    destfile = "tmp.R",
-                    funs_defs = funs_defs)
+        
         n = find_one_call_line(one_call,"tmp.R")
         
         # message(missing_var)
@@ -158,7 +155,25 @@ get_var_def_one_call = function(one_call,my_var,verbose=F,funs_defs){
     }
     
     if(!is.null(funs_defs) && (class(one_call)=="call" & as.character(one_call[[1]]) %in% names(funs_defs))){
-      new_item = deeply_unnest_fun_call(one_call,funs_defs=funs_defs)
+      fun_name = as.character(one_call[[1]])
+      nms = names(one_call)
+      params_loc = which(nms!="")
+      if(length(params_loc)>0){
+        params = lapply(params_loc,function(i){
+          var = nms[i]
+          val = paste(deparse(one_call[[i]]),collapse="")
+          tryCatch({parse(text=paste0(var," = ",val))},error=function(e){
+            print("oups var = val incorrect")
+            browser()
+          })
+        })
+      } else {
+        params = NULL
+      }
+      fun_expr = funs_defs[[fun_name]]
+      new_item = c(params,fun_expr)
+      assertthat::assert_that(length(params) + length(fun_expr) == length(new_item),msg="On attend F(X=x,Y=y) avec F(X,Y){expr1;expr2} => list(X=x,Y=y,expr1,expr2)")
+      
       res <- lapply(new_item,get_var_def_one_call,my_var=my_var,verbose=verbose,funs_defs=funs_defs)
       return(res)
     }
@@ -409,21 +424,17 @@ standardize_code = function(code){
   code
 }
 
-# AJOUTER UN CONCEPT SIMILAIRE AUX SOURCES : FUNCTIONS AVEC DISTINCTION ENTRE DEFINITION ET APPEL
-# 
-# SOURCE1 -> SOURCE2 -> DEF/FUN1
-# SOURCE1 <- CALL/FUN1
-# FUN1 -> WRITE FILE1
-# FUN1 <- READ FILE0
-# SINON CA N'A PAS D'INTERET CAR TOUT SE PASSE DANS 00_actu
-
-REWRITE GET_VAR_DEF WITH THE SAME PARSING APPROACH !
 
 find_one_call_line = function(one_call,curr_script){
   code = readLines(curr_script,encoding = "UTF-8")
   std_call = standardize_code(one_call)
   std_call = strsplit(std_call,split = "\n",fixed = T)[[1]]
+  compact_call = paste(std_call,collapse="")
   code = standardize_code(code)
+  compact_code = paste(code,collapse = "")
+  
+  grepl(compact_call,compact_code,fixed = T)
+  
   res = grep(std_call[1],code,fixed = T)
   # if(length(res) == 0){
   #   matching_call = std_call[1]
@@ -431,11 +442,11 @@ find_one_call_line = function(one_call,curr_script){
   #   # res = grep(matching_call,compact_code,fixed = T)
   #   size_expr = nchar(matching_call)
   #   print(size_expr)
-  #   while(length(res)==0 && size_expr>10){
-  #     size_expr = size_expr-1
-  #     matching_call = substr(matching_call,1,size_expr)
-  #     res = grep(matching_call,code,fixed = T)
-  #   }
+  #   # while(length(res)==0 && size_expr>4){
+  #   #   size_expr = size_expr-1
+  #   #   matching_call = substr(matching_call,1,size_expr)
+  #   #   res = grep(matching_call,code,fixed = T)
+  #   # }
   #   if(length(res)>0){
   #     print(sprintf("On a finalement réduit la première ligne du call aux %s premiers chars.",size_expr))
   #   }

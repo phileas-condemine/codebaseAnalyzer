@@ -146,11 +146,34 @@ is_fun_def = function(one_call){
   }
 }
 
-
+unnest_fun_call = function(one_call,funs_defs){
+  if(!is.null(funs_defs) && (class(one_call)=="call" & as.character(one_call[[1]]) %in% names(funs_defs))){
+    
+  fun_name = as.character(one_call[[1]])
+  nms = names(one_call)
+  params_loc = which(nms!="")
+  if(length(params_loc)>0){
+    params = lapply(params_loc,function(i){
+      var = nms[i]
+      val = paste(deparse(one_call[[i]]),collapse="")
+      tryCatch({parse(text=paste0(var," = ",val))},error=function(e){
+        print("oups var = val incorrect")
+        browser()
+      })
+    })
+  } else {
+    params = NULL
+  }
+  fun_expr = funs_defs[[fun_name]]
+  new_item = c(params,fun_expr)
+  assertthat::assert_that(length(params) + length(fun_expr) == length(new_item),msg="On attend F(X=x,Y=y) avec F(X,Y){expr1;expr2} => list(X=x,Y=y,expr1,expr2)")
+  new_item
+  } else one_call
+}
 
 get_io_one_fun = function(io_fun,file_arg,filepath,dirpath="../sidep/",missing_vars=list(),funs_defs){
   # io_fun = "read.xlsx"
-  # if(io_fun == "saveWorkbook")browser()
+  if(io_fun == "saveWorkbook")browser()
   OK = F  
   try({
     parsed_code <- parse(file.path(dirpath,filepath))
@@ -163,8 +186,8 @@ get_io_one_fun = function(io_fun,file_arg,filepath,dirpath="../sidep/",missing_v
   # parsed_code = purrr::map(parsed_code,get_inside_fun_def)
   parsed_code = purrr::discard(parsed_code,is_fun_def)
   
-  #approche inexacte car on va chercher les définitions au premier degré mais elles peuvent être imbriquées !
-  parsed_code = lapply(parsed_code,deeply_unnest_fun_call,funs_defs=funs_defs)
+  #approche inexacte car on va chercher les définitions au premier degré mais elles peuvent être imbriquées
+  # parsed_code = lapply(parsed_code,unnest_fun_call,funs_defs=funs_defs)
   
   code = unlist(parsed_code)
   
