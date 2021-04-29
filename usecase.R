@@ -15,7 +15,7 @@ sapply(pkgs, function(x) {
 source("utils.R",local = T,encoding = "UTF-8")
 source("sources.R",local = T,encoding = "UTF-8")
 source("inputs.R",local = T,encoding = "UTF-8")
-source("outputs.R",local = T,encoding = "UTF-8")
+source("functions.R",local = T,encoding = "UTF-8")
 source("viz.R",local = T,encoding = "UTF-8")
 
 
