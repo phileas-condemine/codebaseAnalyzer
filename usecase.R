@@ -3,6 +3,8 @@
 library(data.table)
 library(visNetwork)
 library(readxl)
+library(yaml)
+library(htmlwidgets)
 # FIND DEPENDENCIES AND LOAD THE PKG TO BE ABLE TO "match.call" & "match.fun"
 pkgs = readLines("../sidep/src/00_Actualisation_pcr_sero.R",encoding = "UTF-8")
 pkgs = pkgs[grepl("^library\\(",pkgs)]
@@ -39,11 +41,14 @@ reader_funs = c(
 writer_funs = c(
   "fwrite"="file",
   "writeLines"="con",
-  "saveWorkbook"="file",
-  "ggsave"="filename",
+  "saveWorkbook"="file",#attention writeData ajoute des onglets au wb mais n'écrit pas le fichier sur disque !
+  # "ggsave"="filename",
   "save"="file",
   "saveRDS"="file",
-  "write.xlsx"="file"
+  "write.xlsx"="file",
+  "saveWidget"="file",
+  "write.csv"="file",
+  "write.table"="file"
   
 )
 
@@ -54,9 +59,18 @@ codes_path = unique(c(code_architecture$parent,code_architecture$child))
 my_var="safe_fread"
 get_var_def(scripts = codes_path,my_var = my_var)
 
-dt = code_architecture
 
-full_unnested_code = unnest_source()
+unnest_source(destfile = "full_code.R")
+funs_defs = find_funs_defs()
+
+# need_to_be_unnested = fun_has_nested_custom_fun(funs_defs,funs_defs)
+need_to_be_unnested = expr_has_custom_fun(funs_defs,funs_defs)
+need_to_be_unnested = sum(unlist(need_to_be_unnested))
+assertthat::assert_that(need_to_be_unnested==0,msg="Si on a des custom_functions imbriquées, il faut définir une fonction pour les dépiler complètement (unnest_funs_defs)")
+
+unnest_funs_in_script(filepath = "full_code.R",destfile = "full_code_unnest_fun_calls.R",funs_defs=funs_defs)
+
+
 
 filepath = sample(codes_path,1)
 
@@ -67,19 +81,23 @@ missing_vars = list(
   "path_T" = "/data1/sidep_bases_clean/",
   "path_data" = "/data1/sidep_brut/",
   "path_sorties_agregees" = "data/sorties/",
-  "date_MMJJ"=format(Sys.Date(),format="%m%d"),
-  "fichier_source"=sprintf("data/verifs/%s_sidep_par_patient(_bis).xlsx",format(Sys.Date(),format="%Y%m%d"))
+  "date_MMJJ"="Date_MMJJ",
+  "date_AAAAMMJJ"=format(Sys.Date(),format="%Y%m%d"),
+  "date_AAMMJJ"=substr(format(Sys.Date(),format="%Y%m%d"),3,8),
+  "jour_date" = Sys.Date(),
+  "date_dataset" = Sys.Date()
+  # "fichier_source"=sprintf("data/verifs/%s_sidep_par_patient(_bis).xlsx",format(Sys.Date(),format="%Y%m%d"))
   # "type_test"=c("pcr","sero","antigenique","antigen-complet","pcr_complet","pcr_respi","pcr_sal_mil","pcr_sal","pcr_mil"),
   # "type_date"=c("prelev","valid")
 )
 
-tmp = get_io(filepath,io_funs=reader_funs,missing_vars=missing_vars,mode = "read")
+filepath = "src/utils/exporter_tableau_punaise.R"
+# debugonce(get_io)
+tmp = get_io(filepath,io_funs=reader_funs,missing_vars=missing_vars,mode = "read",funs_defs=funs_defs)
 
-inputs = lapply(codes_path,get_io,io_funs=reader_funs,missing_vars=missing_vars,mode = "read")
+inputs = lapply(codes_path,get_io,io_funs=reader_funs,missing_vars=missing_vars,mode = "read",funs_defs=funs_defs)
 names(inputs) <- codes_path
 
-all_missing_vars = readLines("all_missing_vars.txt")
-all_missing_vars = unique(all_missing_vars)
 
 
 guessed_readers = lapply(inputs,function(x)x$guessed_io_fun)
@@ -88,28 +106,86 @@ guessed_readers = unique(guessed_readers)
 guessed_readers
 
 all_inputs = rbindlist(lapply(inputs,function(x)x$res))
-
-
-tmp = get_io(filepath,io_funs=writer_funs,missing_vars=missing_vars,mode = "write")
-
-
-
 create_network(all_inputs)
 
-create_network(rbindlist(list(all_inputs,dt),fill = T,use.names = T))
+# filepath = "src/heatmaps/Heatmaps Sidep (TI, donnees Drees).R"
+filepath = "src/00_Actualisation_pcr_sero.R"
+# debugonce(get_io)
+tmp = get_io(filepath,io_funs=writer_funs,missing_vars=missing_vars,mode = "write",funs_defs=funs_defs)
+outputs = lapply(codes_path,get_io,io_funs=writer_funs,missing_vars=missing_vars,mode = "write",funs_defs=funs_defs)
 
-create_network(rbindlist(list(all_inputs, dt), fill = T, use.names = T)) %>% visOptions(
-  highlightNearest =  list(
-    enabled = TRUE
-    # ,algorithm = "hierarchical"
-  )
-  # collapse = TRUE
-)
+guessed_writers = lapply(outputs,function(x)x$guessed_io_fun)
+guessed_writers = unlist(guessed_writers)
+guessed_writers = unique(guessed_writers)
+guessed_writers
+all_outputs = rbindlist(lapply(outputs,function(x)x$res))
+all_outputs$child
+create_network(all_outputs)
+
+dedup_expr = rbindlist(list(
+  data.table("raw"="paste0(path_sortie, date_AAAAMMJJ, \"_sidep_pcr_\", month[i], \".csv\")","std"="sidep_pcr.csv"),
+  data.table("raw"="/data1/sidep_bases_clean/20210429_sidep_pcr_0.csv","std"="sidep_pcr.csv"),
+  data.table("raw"="paste0(path_data, extract[\"MED4\"])","std"="sidep_daily.csv"),
+  data.table("raw"="paste0(path_data, extract[\"MED2\"])","std"="sidep_daily.csv"),
+  data.table("raw"="today_files_path","std"="sidep_daily.csv"),
+  data.table("raw"="mini_corres_files","std"="rattrapageP1P2"),
+  data.table("raw"=grep("_corresp_pseudos\\.csv",all_outputs$child,value=T),"std"="rattrapageP1P2"),
+  data.table("raw"=grep("_sidep_pcr_0\\.csv",all_inputs$child,value=T),"std"="sidep_pcr.csv")
+))
 
 
-tmp = get_io(filepath,io_funs=reader_funs,missing_vars=missing_vars,mode = "read")
+dedup_expr$raw %in% all_outputs$child
+uniqueN(all_outputs$child)
+dedup_expr$raw %in% all_inputs$child
+uniqueN(all_inputs$child)
 
-# UNNEST THE WHOLE CODE =>
-# LOOK FOR DEFINITION OF THE OBJECT WE MISS =>
-# GET THE LAST BEFORE SOURCE/I/O BECAUSE IT MAY CHANGE
+all_inputs[dedup_expr,child:=i.std,on=c("child"="raw")]
+all_outputs[dedup_expr,child:=i.std,on=c("child"="raw")]
+
+
+all_missing_vars = readLines("all_missing_vars.txt")
+all_missing_vars = unique(all_missing_vars)
+all_missing_vars
+
+# il y a un pb avec les saveWorkbook dans nb_tests & export_punaise, peut-être aussi quand il y a référence au pkg::fun openxlsx::saveWorkbook
+
+
+# create_network(rbindlist(list(all_inputs,code_architecture),fill = T,use.names = T))
+v <- create_network(dt = rbindlist(
+  list(all_inputs, code_architecture, all_outputs),
+  fill = T,
+  use.names = T
+)) %>% visOptions(
+  selectedBy = "group",
+  highlightNearest = TRUE,
+  nodesIdSelection = TRUE
+) %>%
+  visHierarchicalLayout()
+
+v <- v %>%
+  visInteraction(hover = T) %>%
+  visEvents(hoverNode  = "function(e){
+            var label_info = this.body.data.nodes.get({
+              fields: ['label', 'label_long'],
+              filter: function (item) {
+                return item.id === e.node
+              },
+              returnType :'Array'
+            });
+            this.body.data.nodes.update({id: e.node, label : label_info[0].label_long, label_long : label_info[0].label});
+            }") %>% 
+  visEvents(blurNode  = "function(e){
+            var label_info = this.body.data.nodes.get({
+              fields: ['label', 'label_long'],
+              filter: function (item) {
+                return item.id === e.node
+              },
+              returnType :'Array'
+            });
+            this.body.data.nodes.update({id: e.node, label : label_info[0].label_long, label_long : label_info[0].label});
+            }")
+
+v
+
+visNetwork::visSave(v,"network_prod_sidep.html")
 

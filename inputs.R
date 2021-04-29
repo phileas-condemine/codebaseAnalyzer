@@ -13,7 +13,7 @@
 #' @export
 #'
 #' @examples
-get_input_one_call = function(one_call,io_fun,file_arg,curr_script,dirpath,missing_vars = list()){
+get_io_one_call = function(one_call,io_fun,file_arg,curr_script,dirpath,missing_vars = list(),funs_defs){
   this_env = environment()
   if(length(missing_vars)>0){
     print(sprintf("Loading vars %s",paste(names(missing_vars),collapse=", ")))
@@ -53,6 +53,12 @@ get_input_one_call = function(one_call,io_fun,file_arg,curr_script,dirpath,missi
   if(!file_arg %in% names(cc_list) && eefun=="safe_fread"){
     print("arg is not parsed for safe_fread => hardcoded to 1st arg")
     iopath = cc_list[[2]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="saveWorkbook") {
+    print("arg is not parsed for saveWorkbook => hardcoded to 2nd arg")
+    iopath = cc_list[[3]]
+  }  else if (!file_arg %in% names(cc_list) && eefun=="write.csv") {
+    print("arg is not parsed for write.csv => hardcoded to 2nd arg")
+    iopath = cc_list[[3]]
   } else {
     iopath = cc_list[[file_arg]]
   }
@@ -77,7 +83,7 @@ get_input_one_call = function(one_call,io_fun,file_arg,curr_script,dirpath,missi
         iopath_evaluated <- eval(iopath)
         had_missing_var_error = F
       },
-      error=function(e)error_get_missing_var(e,env=this_env,missing_vars=missing_vars,verbose=1),
+      error=function(e)error_get_missing_var(e,env=this_env,missing_vars=missing_vars,verbose=1,funs_defs=funs_defs),
       silent = T)
       iter = iter+1
     }
@@ -125,36 +131,77 @@ get_inside_fun_def = function(one_call){
   }
 }
 
-get_inputs_one_io_fun = function(io_fun,file_arg,filepath,dirpath="../sidep/",missing_vars=list()){
+is_fun_def = function(one_call){
+  is.call(one_call)
+  if(length(one_call)>=3){
+    fun = one_call[[1]]
+    val = one_call[[3]]
+    if((fun == "=" | fun == "<-") && class(val)=="call" && val[[1]] == "function"){
+      T      
+    } else {
+      F
+    }
+  } else {
+    F
+  }
+}
+
+
+
+get_io_one_fun = function(io_fun,file_arg,filepath,dirpath="../sidep/",missing_vars=list(),funs_defs){
   # io_fun = "read.xlsx"
-  parsed_code = parse(file(file.path(dirpath,filepath),encoding = "UTF-8"))
+  # if(io_fun == "saveWorkbook")browser()
+  OK = F  
+  try({
+    parsed_code <- parse(file.path(dirpath,filepath))
+    OK = T
+  },silent = T)
+  if(!OK){
+    parsed_code <- parse(file(file.path(dirpath,filepath),encoding = "UTF-8"))
+  }
   # browser()
-  parsed_code = purrr::map(parsed_code,get_inside_fun_def)
+  # parsed_code = purrr::map(parsed_code,get_inside_fun_def)
+  parsed_code = purrr::discard(parsed_code,is_fun_def)
+  
+  #approche inexacte car on va chercher les définitions au premier degré mais elles peuvent être imbriquées !
+  parsed_code = lapply(parsed_code,deeply_unnest_fun_call,funs_defs=funs_defs)
+  
   code = unlist(parsed_code)
   
   inline_io_fun_pattern = get_inline_io_fun_pattern(io_fun)#la fonction peut être invoquée avec une parenthèse mais aussi dans un lapply, map... et donc être suivie d'un espace, virgule, parenthèse fermante...
   
   code = grep(inline_io_fun_pattern,code,value=T)
   # code = grep(io_fun,code,value=T)
-  
-  print(sprintf("%s expressions trouvées qui utilisent la io_fun %s",length(code),io_fun))
-  curr_script = filepath
-  inputs_one_io_fun = sapply(code,get_input_one_call,io_fun=io_fun,file_arg=file_arg,curr_script=curr_script,dirpath=dirpath,missing_vars=missing_vars)
-  
-  inputs_one_io_fun = unname(inputs_one_io_fun)
-  
+  if(length(code)>0){
+    print(sprintf("%s expressions trouvées qui utilisent la io_fun %s",length(code),io_fun))
+    curr_script = filepath
+    io_one_io_fun = sapply(
+      code,
+      get_io_one_call,
+      io_fun = io_fun,
+      file_arg = file_arg,
+      curr_script = curr_script,
+      dirpath = dirpath,
+      missing_vars = missing_vars,
+      funs_defs=funs_defs
+    )
+    
+    io_one_io_fun = unname(io_one_io_fun)
+    io_one_io_fun
+  } else NULL
   
 }
 
-get_io_i = function(i,io_funs,filepath=filepath,dirpath=dirpath,missing_vars=list()){
+get_io_i = function(i,io_funs,filepath=filepath,dirpath=dirpath,missing_vars=list(),funs_defs){
   io_fun = names(io_funs[i])
   file_arg = unname(io_funs[i])
-  get_inputs_one_io_fun(
+  get_io_one_fun(
     io_fun = io_fun,
     file_arg = file_arg,
     filepath = filepath,
     dirpath = dirpath,
-    missing_vars = missing_vars
+    missing_vars = missing_vars,
+    funs_defs=funs_defs
   )
   
 }
@@ -189,10 +236,16 @@ guess_writers = function(filepath,dirpath="../sidep"){
 #' @export
 #'
 #' @examples
-get_io = function(filepath,io_funs,
-                  dirpath="../sidep",missing_vars=missing_vars,mode="read") {
+get_io = function(filepath,
+                  io_funs,
+                  dirpath = "../sidep",
+                  missing_vars = missing_vars,
+                  funs_defs,
+                  mode = "read") {
+  
   
   print("guess readers in file")
+  print(filepath)
   if(mode=="read"){
     guessed_io_fun = guess_readers(filepath,dirpath)
     print(guessed_io_fun)
@@ -203,7 +256,7 @@ get_io = function(filepath,io_funs,
     guessed_io_fun = "mode incorrect"
   }
   
-  inputs = sapply(1:length(io_funs),get_io_i,filepath=filepath,dirpath=dirpath,io_funs=io_funs,missing_vars=missing_vars)
+  inputs = sapply(1:length(io_funs),get_io_i,filepath=filepath,dirpath=dirpath,io_funs=io_funs,missing_vars=missing_vars,funs_defs=funs_defs)
   names(inputs) <- names(io_funs)
   inputs = unlist(inputs)
   if(length(inputs)>0 & mode[1]=="read"){

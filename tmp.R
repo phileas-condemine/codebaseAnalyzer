@@ -1,12 +1,16 @@
 path_config <- "src/"
 jour_date = Sys.Date()
-date_MMJJ = stringr::str_sub(as.character(jour_date), start = 6L)
-date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
-annee <- stringr::str_sub(as.character(jour_date), end = 4L)
-date_dataset = as.Date(paste0(annee, "-", substr(date_MMJJ, 1,2), "-", substr(date_MMJJ, 3, 4)))
+date_AAAAMMJJ = format(jour_date,format="%Y%m%d")
+date_AAMMJJ = substr(date_AAAAMMJJ,3,8)
+annee <- lubridate::year(jour_date)
+date_dataset = as.Date(date_AAAAMMJJ,format="%Y%m%d")
 jour_prev_update = Sys.Date()-1
-month = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020",
-         "Octobre2020", "Novembre2020", "Decembre2020", "Janvier2021", "Fevrier2021", "Mars2021","Avril2021")
+MoisAAAA = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020",
+          "Octobre2020", "Novembre2020", "Decembre2020", "Janvier2021", 
+          "Fevrier2021", "Mars2021","Avril2021")
+YYYY.mm = c("2020.5",  "2020.6",  "2020.7",  "2020.8",  
+            "2020.9",  "2020.10", "2020.11", "2020.12", "2021.1", 
+            "2021.2", "2021.3","2021.4")
 date_vars = c("day_prelev","day_valid","day_extract_sidep")
 posixct_vars = c("date_prelev","date_valid","date_valid_init")
 char_vars = c("Pseudonyme", "FINESS_ET", 
@@ -37,10 +41,10 @@ daily_files_char_vars = c("Pseudonyme","Pseudo1","Pseudo2","Sexe",
 new_tag_char_vars = c("RPPSPrelevTA", "AdeliPrelevTA", "idNATPrelevTA", "CPPrelevTA")
 run_expertise = T
 JP2_fromJm1P1 = F
-Jm1 = format(Sys.Date()-1,format="%m%d")
+Jm1 = format(Sys.Date()-1,format="%Y%m%d")
 check_collision_p1p2 = F
 rewrite_fichier_variants = F
-addP2 = F
+addP2 = T
 tempo="j" #j ou we
 metadata <- yaml::yaml.load_file(paste0(path_config,"config.yaml"))
 for(i in names(metadata)){
@@ -55,26 +59,34 @@ library(knitr)
 library(rmarkdown)
 library(kableExtra)
 library(stringi)
-library(bit64) # mieux vaut lister les package ici que dans les scripts sourcÃ©s
+library(bit64) # mieux vaut lister les package ici que dans les scripts sourcés
 library(ISOweek)
 library(lest) # ajout library pour case_when de data.table et non dplyr
 library(parallel) # ajout pour parallelisation
 library(fasttime)
 library(fst)
+library(ggplot2)
 library(vroom)
 get_new_rattrapage = function(){
   
   t1= Sys.time()
   
-  new_rattrapage_full = fst::read_fst("/data1/sidep_bases_clean/numID/p1p2FromRattrapageV2.fst")
-  new_rattrapage_full = data.table(new_rattrapage_full)
-  print(nrow(new_rattrapage_full))#
-  assertthat::assert_that(sum(nchar(new_rattrapage_full$Pseudo1)!=64)==0,msg="Le Pseudonyme devrait toujours Ãªtre sur 64 caractÃ¨res")
-  new_rattrapage = unique(new_rattrapage_full[,.(Pseudo1,Pseudo2)])
+  new_rattrapage = fst::read_fst("/data1/sidep_bases_clean/numID/p1p2dedupFromRattrapageV2.fst")
+  new_rattrapage = data.table(new_rattrapage)
+  print(nrow(new_rattrapage))
+  
   
   mini_corres_files = list.files("/data1/sidep_bases_clean/correspondance pseudos",full.names = T,pattern = "^[0-9]{4}_corresp_pseudos.csv$")
   mini_rattrapage = rbindlist(pbapply::pblapply(mini_corres_files,fread,select=c("Pseudo1","Pseudo2")))
   mini_rattrapage = unique(mini_rattrapage)
+  
+  fichier_du_jour = paste0(date_AAAAMMJJ,"_corresp_pseudos.csv")
+  if(!fichier_du_jour %in% basename(mini_corres_files)){
+    today_files_path = list.files(path_data,full.names = T,pattern=sprintf("CSV_DREES_MED[24]_%s",date_AAMMJJ))
+    today_files = rbindlist(lapply(today_files_path, fread,  quote = "",select=c("Pseudo1","Pseudo2"),
+                 verbose = F, sep = "|", header = TRUE, colClasses="character", encoding = "Latin-1"))
+    mini_rattrapage = rbindlist(list(mini_rattrapage,today_files))
+  }
   
   new_rattrapage = rbindlist(list(new_rattrapage,mini_rattrapage),use.names=T)
   new_rattrapage = unique(new_rattrapage)
@@ -108,40 +120,25 @@ if(JP2_fromJm1P1){
 if(run_expertise){
   render(input = paste0(path,"src/viz/expertise_donnees_du_jour_pcr_sero_ajout_pseudo2.Rmd"),
          output_format = "word_document",
-         output_file = paste0(path, "data/sorties/expertise/2021", date_MMJJ, "_expertise_donnees_du_",
+         output_file = paste0(path, "data/sorties/expertise/", date_AAAAMMJJ, "_expertise_donnees_du_",
                               ifelse(tempo=='j','jour','week-end'),".docx"))
 }
 print("01 nettoyage SIDEP")
 safe_fread = purrr::quietly(data.table::fread)
 prep_data <- function(jour=jour_date, 
                       last_update=jour_prev_update,
-                      mois=c("Mai2020","Juin2020","Juillet2020","Aout2020",
-                             "Septembre2020","Octobre2020", "Novembre2020", "Decembre2020",
-                             "Janvier2021", "Fevrier2021", "Mars2021","Avril2021"),
-                      noms_mois=c("2020.5",  "2020.6",  "2020.7",  "2020.8",  
-                                  "2020.9",  "2020.10", "2020.11", "2020.12", "2021.1", "2021.2", "2021.3","2021.4"),
+                      MoisAAAA,
+                      YYYY.mm,
                       day_init="2020-05-20",corres,addP2){
   
-  month_init = lest::case_when(mois[1]=="Mai2020" ~ 5,
-                               mois[1]=="Juin2020" ~ 6,
-                               mois[1]=="Juillet2020" ~ 7,
-                               mois[1]=="Aout2020" ~ 8,
-                               mois[1]=="Septembre2020" ~ 9,
-                               mois[1]=="Octobre2020" ~ 10,
-                               mois[1]=="Novembre2020" ~11,
-                               mois[1]=="Decembre2020" ~12,
-                               mois[1]=="Janvier2021" ~ 1,
-                               mois[1]=="Fevrier2021" ~ 2,
-                               mois[1]=="Mars2021" ~ 3,
-                               mois[1]=="Avril2021" ~ 4)
   
   
   
   TIME_INIT=Sys.time()
   print(paste0("lancement: ",TIME_INIT))
   
-  date_MMJJ_last = stringr::str_replace(stringr::str_sub(as.character(last_update), start = 6L), "-", "")
-  
+  date_AAAAMMJJ_last = format(last_update,format="%Y%m%d")
+  date_AAMMJJ_last = substr(date_AAAAMMJJ_last,3,8)
   extractions = list.files(path_data)
   extractions = grep("CSV_DREES", extractions,value = T)
   extractions = grep(".csv", extractions,value = T)
@@ -157,16 +154,12 @@ prep_data <- function(jour=jour_date,
   extractions = sort(extractions, decreasing = T)
   names(extractions) <- substr(extractions,13,16)
   
-  print("Chargement des bases journaliÃ¨res Ã  agrÃ©ger")
-  d_init = as.Date(last_update+1)
-  d_fin = jour
-  init_MMJJ = stringr::str_replace(stringr::str_sub(d_init, start = 6L), "-", "")
-  fin_MMJJ = stringr::str_replace(stringr::str_sub(d_fin, start = 6L), "-", "")
-  extract = extractions[substr(extractions,18,21)==init_MMJJ]
+  print("Chargement des bases journalières à agréger")
+  extract = extractions[substr(extractions,16,21)==date_AAMMJJ]
   names(extract) <- substr(extract,11,14)
   
   sidep_add_1 = safe_fread(paste0(path_data, extract["MED4"]),  quote = "",
-                                  verbose = TRUE, sep = "|", header = TRUE, colClasses=list(
+                                  verbose = F, sep = "|", header = TRUE, colClasses=list(
                                     character = daily_files_char_vars,
                                     numeric = "Age"), encoding = "Latin-1")
   print(extract["MED4"])
@@ -177,7 +170,7 @@ prep_data <- function(jour=jour_date,
   sidep_add_1 <- sidep_add_1$result
   
   sidep_add_2 = safe_fread(paste0(path_data, extract["MED2"]), quote = "",
-                                  verbose = TRUE, sep = "|", header = TRUE, colClasses=list(
+                                  verbose = F, sep = "|", header = TRUE, colClasses=list(
                                     character = daily_files_char_vars,
                                     numeric = "Age"), encoding = "Latin-1")
   print(extract["MED2"])
@@ -186,13 +179,13 @@ prep_data <- function(jour=jour_date,
   w <- w[grepl("^Stopped early",w)]
   if(length(w)>0){stop(w)}
   sidep_add_2 <- sidep_add_2$result
-  
   rm(w)
   
   sidep_add = rbind(sidep_add_1, sidep_add_2)
   rm(sidep_add_1, sidep_add_2)
   
-  sidep_add$day_extract_sidep = as.Date(d_init)
+  
+  sidep_add$day_extract_sidep = as.Date(date_AAAAMMJJ,format="%Y%m%d")
   
   sidep_add[Pseudo2!="",Pseudo_diff:=as.numeric(Pseudo1!=Pseudo2)]
   
@@ -203,7 +196,7 @@ prep_data <- function(jour=jour_date,
   
   
   data.table::fwrite(stockage_pseudo,
-                     paste0(path_sortie, "correspondance pseudos/",date_MMJJ,'_corresp_pseudos.csv'),
+                     paste0(path_sortie, "correspondance pseudos/",date_AAAAMMJJ,'_corresp_pseudos.csv'),
                      quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
                      qmethod = c("escape"),dateTimeAs = "ISO", verbose = TRUE)
   
@@ -255,7 +248,7 @@ prep_data <- function(jour=jour_date,
   
   sidep_add[, regCampagneDepistage := stringr::str_extract(NumCampagneDepistage, "^[A-Za-z]{3}")]
   if (sidep_add[nchar(regCampagneDepistage)<3, .N]>0){
-    print("Probleme: il y a des trigrammes dans NumCampagneDepistage qui ont moins de 3 caractÃ¨res")
+    print("Probleme: il y a des trigrammes dans NumCampagneDepistage qui ont moins de 3 caractères")
   }
   sidep_add[, regCampagneDepistage := NULL]
   
@@ -285,8 +278,7 @@ prep_data <- function(jour=jour_date,
   
   sidep_add = sidep_add[day_prelev <= day_extract_sidep]
   
-  sidep_add = sidep_add[((month(day_prelev) >= month_init) & (lubridate::year(day_prelev) == "2020"))|
-                          (lubridate::year(day_prelev) == "2021")] 
+  
   
   
   print("Pseudonymes")
@@ -335,32 +327,32 @@ prep_data <- function(jour=jour_date,
   etapes = rbind(etapes, cbind(var="Duplicates_all_lines", n_row = nrow(sidep_add)))
   
   
-  print("Premiers symptÃ´mes")
+  print("Premiers symptômes")
   sidep_add[PremierSymptomes%in%c("","UU", "u",
-                                  "non prÃ©cisÃ©", "Non communiquÃ©",
-                                  "NON RENSEIGNE", "non renseignÃƒÂ©", "nrens",
-                                  "PAS RENSEIGNE", "NR", "Non renseignÃ©",
-                                  "NON PRECISE", "Non prÃ©cisÃ©",
-                                  "non renseignÃ©e",
+                                  "non précisé", "Non communiqué",
+                                  "NON RENSEIGNE", "non renseignÃ©", "nrens",
+                                  "PAS RENSEIGNE", "NR", "Non renseigné",
+                                  "NON PRECISE", "Non précisé",
+                                  "non renseignée",
                                   "NRENS", "np", "NCNR",
                                   "NRE","NSP","NP","NM","V",
                                   "ne sais pas", "non fait",
                                   "VOIR PRESCRIPTION JOINTE",
                                   "NPC","INC","BILAN PREOP",
                                   "?","nc","nr","0.000000",'0R',
-                                  "GAPS2","Demande annulÃ©e",
-                                  "Non communiquÃ©", "NCNR2"), 
+                                  "GAPS2","Demande annulée",
+                                  "Non communiqué", "NCNR2"), 
             PremierSymptomes:= "U"]
   sidep_add[PremierSymptomes%in%c("PAS DE SYMPTOME", "a", "Asymptomatique.",
                                   "AUCUN SYMPTOME", "asy", "APSYU", "ASy", 
                                   "ASYM","A","ASYASY","ASYM ", "ASYU", "PASYM", "UASY",
-                                  "avant entrÃ©e en EHPAD", "avant retour en EHPAD",
-                                  "entrÃ©e de geriatrie", "entree en geriatrie",
-                                  "avant rentrÃ©e en ehpad","AVANT TRANSFERT EHPAD",
+                                  "avant entrée en EHPAD", "avant retour en EHPAD",
+                                  "entrée de geriatrie", "entree en geriatrie",
+                                  "avant rentrée en ehpad","AVANT TRANSFERT EHPAD",
                                   "BILAN PRE OP", "TEST PRE OP", "TRANSFERT EN  EHPAD",
                                   "Transfert SSR-P"),
             PremierSymptomes:= "ASY"]
-  sidep_add[grepl("(Pas de symptomes)|(ASYV)|(VASY)|(PrÃ© opÃ©ratoire)|(PAS DE SYMPTOMES)|(PRE-OPERATOIRE)", PremierSymptomes), PremierSymptomes:="ASY"]
+  sidep_add[grepl("(Pas de symptomes)|(ASYV)|(VASY)|(Pré opératoire)|(PAS DE SYMPTOMES)|(PRE-OPERATOIRE)", PremierSymptomes), PremierSymptomes:="ASY"]
   sidep_add[grepl("(apparus le jour ou la veille)|(D1)|(S01S01)", PremierSymptomes), PremierSymptomes:="S01"]
   sidep_add[grepl("(apparus 2,3)|(apparus 2, 3)|(D2)|(D3)|(quelques jours)|(Quelques jours)", PremierSymptomes), PremierSymptomes:="S24"]
   sidep_add[PremierSymptomes %in% c("05/05/20"),PremierSymptomes:="S57"] #date plvt 11/05
@@ -370,19 +362,19 @@ prep_data <- function(jour=jour_date,
   sidep_add[grepl("(apparus plus de 2 semaines)|(apparus plus de deux semaines)|(+ 15 jours)|(>j15)|(SS34)|(SS3SS3)|(S2-S4)", PremierSymptomes), PremierSymptomes:="SS3"]
   sidep_add[grepl("(apparus plus de deux semaines avant le prelevement)|(apparus entre 15 et 28 jours)|(SS3U)", PremierSymptomes), PremierSymptomes:="SS3"]
   sidep_add[grepl("(il y a 1 mois)|(plus de 3 semaines)|(DECEMBRE 19)|(plus de quatre semaines)|(D29)|(SP4S)",PremierSymptomes), PremierSymptomes:="SS3"]
-  sidep_add[grepl("(Eruption cutanÃ©e)|(colique)|(30/05/20)|(07/06/20)|(202005)|(202006)",PremierSymptomes), PremierSymptomes:="SNA"]
+  sidep_add[grepl("(Eruption cutanée)|(colique)|(30/05/20)|(07/06/20)|(202005)|(202006)",PremierSymptomes), PremierSymptomes:="SNA"]
   
   
   
   print("TypologiePatient")
   sidep_add[TypologiePatient == "", TypologiePatient := "U"]
   
-  sidep_add[TypologiePatient%in%c("Autre structure d'hÃ©bergement collectif",
-                                  "Autre structure d'hÃ©bergement",
-                                  "autre structure d'hÃ©bergement collectif"), 
+  sidep_add[TypologiePatient%in%c("Autre structure d'hébergement collectif",
+                                  "Autre structure d'hébergement",
+                                  "autre structure d'hébergement collectif"), 
             TypologiePatient:= "A"]
   
-  sidep_add[TypologiePatient%in%c("rÃ©sident en EHPAD","RÃ©sident en EHPAD"), 
+  sidep_add[TypologiePatient%in%c("résident en EHPAD","Résident en EHPAD"), 
             TypologiePatient:= "E"]
   sidep_add[TypologiePatient%in%c("HH"), TypologiePatient:= "H"]
   sidep_add[TypologiePatient%in%c("II","i"), TypologiePatient:= "H"]
@@ -394,9 +386,9 @@ prep_data <- function(jour=jour_date,
   
   print("Resultat")
   
-  sidep_add[Resultat %in% c("negatif","NEGATIF","NÃ©gative", "N?gatif", "NN", "NNN", "NEG", "n"),
+  sidep_add[Resultat %in% c("negatif","NEGATIF","Négative", "N?gatif", "NN", "NNN", "NEG", "n"),
             Resultat := "N"]
-  sidep_add[grepl( "(ninterp)|(ndÃ©terminÃ©)", Resultat), Resultat := "I"]
+  sidep_add[grepl( "(ninterp)|(ndéterminé)", Resultat), Resultat := "I"]
   sidep_add[Resultat %in% c("PP"), Resultat := "P"]
   
   sidep_add[Resultat=='N',valeur:="N"]
@@ -404,7 +396,7 @@ prep_data <- function(jour=jour_date,
   sidep_add[Resultat=='I',valeur:="I"]
   sidep_add[Resultat=='X',valeur:="X"]
   
-  print("Doublons dans les derniÃ¨res extractions")
+  print("Doublons dans les dernières extractions")
   
   
   sidep_add[, na_res := ifelse(Resultat %in% c("","X","I") | is.na(Resultat) | nchar(Resultat)>1, 1, 0)]
@@ -455,9 +447,9 @@ matching_fi = function(data_sidep){
   load(paste0(path, "data/utils/finess_1116.Rdata")) 
   
   liste_et <- liste_et%>%
-                select(DEP_ET=`ET-DÃ©partement\nCode`,
-                    FINESS_EJ=`EJ-NÂ°FINESS`,DEP_EJ=`EJ-DÃ©partement\nCode`,
-                    FINESS_ET=`ET-NÂ°FINESS`)
+                select(DEP_ET=`ET-Département\nCode`,
+                    FINESS_EJ=`EJ-N°FINESS`,DEP_EJ=`EJ-Département\nCode`,
+                    FINESS_ET=`ET-N°FINESS`)
   sidep_geo <- inner_join(data_sidep,
                            liste_et%>%select(fi_init=`FINESS_ET`,DEP_ET,
                                              FINESS_EJ,DEP_EJ),
@@ -479,7 +471,7 @@ matching_fi = function(data_sidep){
   data_sidep <- left_join(data_sidep,
                      bio3_et%>%group_by(FINESS_EJ)%>%slice(1)%>%ungroup()%>%select(FINESS_EJ,cat_etb),
                      by='FINESS_EJ')
-  data_sidep$cat_pp <- ifelse(data_sidep$cat_etb  %in% c("2000","3000"),"privÃ©",NA)
+  data_sidep$cat_pp <- ifelse(data_sidep$cat_etb  %in% c("2000","3000"),"privé",NA)
   data_sidep$cat_pp <- ifelse(data_sidep$cat_etb == "1000","public",data_sidep$cat_pp)
   table(data_sidep$cat_pp,exclude=NULL)
   data_sidep = data.table(data_sidep)
@@ -520,7 +512,7 @@ matching_fi = function(data_sidep){
   sidep_add=matching_fi(sidep_add)
   
   
-  print("Code postal, dÃ©partement et rÃ©gion")
+  print("Code postal, département et région")
   
   sidep_add[substr(CodePostal, 1, 2) %in% c("00", "99", "XX"), CodePostal := NA]
   sidep_add[CodePostal %in% c("", "0", ".", ",", "aucun","AUCUN"), CodePostal := NA]
@@ -569,11 +561,11 @@ matching_fi = function(data_sidep){
   
   
   
-  print("Professionnel de santÃ© et sexe")
+  print("Professionnel de santé et sexe")
   
-  sidep_add[ProfessionelSante%in%c("","UU", ".U", "u","Non communiquÃ©","non fait", "nr",
-                                   "Non prÃ©cisÃ©","np", "NP", "NCDD","NM","NO", "UN",
-                                   "NR","NCNR","NCNR2","Demande annulÃ©e", "Automatique"),
+  sidep_add[ProfessionelSante%in%c("","UU", ".U", "u","Non communiqué","non fait", "nr",
+                                   "Non précisé","np", "NP", "NCDD","NM","NO", "UN",
+                                   "NR","NCNR","NCNR2","Demande annulée", "Automatique"),
             ProfessionelSante:= "U"]
   sidep_add[ProfessionelSante%in%c("n","NN"), ProfessionelSante:= "N"]
   sidep_add[ProfessionelSante%in%c("OO","o"), ProfessionelSante:= "O"]
@@ -582,19 +574,18 @@ matching_fi = function(data_sidep){
   sidep_add[Sexe %in% c("O","","N","A"), Sexe:= "U"]
   
   
-  print("Traitement des bases journaliÃ¨res terminÃ©")
+  print("Traitement des bases journalières terminé")
   
   
   sidep_add = sidep_add[, -c("DatePrelevement", "DateValidationCR","DEP_EJ","DEP_ET", "NumDossier")]
-  print("Chargement des bases agrÃ©gÃ©es") 
+  print("Chargement des bases agrégées") 
   
   
-  mois_lst = as.list(mois)
   t1 <- Sys.time()
-  temp <- paste0(path_sortie, date_MMJJ_last, "_sidep_pcr_")
-  temp_mois <- as.list(mois[1:(length(mois))])
-  if (!file.exists(paste0(temp, "Avril2021.csv"))){
-    temp_mois <- as.list(mois[1:(length(mois)-1)])
+  temp <- paste0(path_sortie, date_AAAAMMJJ_last, "_sidep_pcr_")
+  temp_mois <- MoisAAAA
+  if (!file.exists(paste0(temp, "Mai021.csv"))){
+    temp_mois <- MoisAAAA[1:(length(MoisAAAA)-1)]
   }
   
   sidep_prev_pcr_lst <- pbapply::pblapply(temp_mois,
@@ -608,7 +599,7 @@ matching_fi = function(data_sidep){
                                                                 verbose = F, sep = ";", header = TRUE, encoding ="Latin-1")
                                               if(addP2){
                                                 n = nrow(merge(dt,corres,by="Pseudonyme"))
-                                                print(sprintf("%s lignes parmi %s ont eu un p1 remplacÃ© par p2 dans le fichier %s.",n,nrow(dt),i))
+                                                print(sprintf("%s lignes parmi %s ont eu un p1 remplacé par p2 dans le fichier %s.",n,nrow(dt),i))
                                                 dt[corres,Pseudonyme:=i.Pseudo2,on="Pseudonyme"]
                                               }
                                               dt
@@ -621,7 +612,7 @@ matching_fi = function(data_sidep){
   print(t2-TIME_INIT)
   
   t1 <- Sys.time()
-  path_zip_sero = paste0(path_sortie, date_MMJJ_last, "_sidep_sero.csv") 
+  path_zip_sero = paste0(path_sortie, date_AAAAMMJJ_last, "_sidep_sero.csv") 
   print(path_zip_sero)
   sidep_prev_sero = data.table::fread(path_zip_sero, 
                                       na.strings="",
@@ -634,11 +625,11 @@ matching_fi = function(data_sidep){
     sidep_prev_sero[corres,Pseudonyme:=i.Pseudo2,on="Pseudonyme"]
   }
   t2 <- Sys.time()
-  print(t2-t1) # 49s avec pb chemin rÃ©solu
+  print(t2-t1) # 49s avec pb chemin résolu
   
   
   t1 <- Sys.time()
-  path_zip_pcr_sal_mil = paste0(path_sortie, date_MMJJ_last, "_sidep_pcr_salivaire_milieux_divers.csv") 
+  path_zip_pcr_sal_mil = paste0(path_sortie, date_AAAAMMJJ_last, "_sidep_pcr_salivaire_milieux_divers.csv") 
   print(path_zip_pcr_sal_mil)
   sidep_prev_pcr_sal_mil = data.table::fread(path_zip_pcr_sal_mil, 
                                              na.strings="",
@@ -653,7 +644,7 @@ matching_fi = function(data_sidep){
   t2 <- Sys.time()
   print(t2-t1)
   
-  print("ConcatÃ©nation des bases en liste par mois")
+  print("Concaténation des bases en liste par mois")
   sidep_add[, `:=`(RPPSPrescripteur = as.character(RPPSPrescripteur))]
   t1 <- Sys.time()
   
@@ -692,19 +683,9 @@ matching_fi = function(data_sidep){
   t2 <- Sys.time()
   print(t2-t1)
   
-  if (!file.exists(paste0(temp, "Janvier2021.csv"))){
-    sidep_prev_pcr_lst[[9]] <- data.table::data.table()
-  }
-  
-  if (!file.exists(paste0(temp, "Fevrier2021.csv"))){
-    sidep_prev_pcr_lst[[10]] <- data.table::data.table()
-  }
-  
-  if (!file.exists(paste0(temp, "Mars2021.csv"))){
-    sidep_prev_pcr_lst[[11]] <- data.table::data.table()
-  }
-  if (!file.exists(paste0(temp, "Avril2021.csv"))){
-    sidep_prev_pcr_lst[[12]] <- data.table::data.table()
+  last_month = MoisAAAA[length(MoisAAAA)]
+  if (!file.exists(paste0(temp, last_month))){
+    sidep_prev_pcr_lst[[length(sidep_prev_pcr_lst)+1]] <- data.table::data.table()
   }
   
   t1 <- Sys.time()
@@ -755,9 +736,9 @@ matching_fi = function(data_sidep){
   sidep_add_lst <- lapply(sidep_add_lst, 
                           function(i) i[, annee_prelev := NULL])
   
-  names(sidep_prev_pcr_lst) <- noms_mois
+  names(sidep_prev_pcr_lst) <- YYYY.mm
   t1 <- Sys.time()
-  sidep_lst <- lapply(noms_mois, 
+  sidep_lst <- lapply(YYYY.mm, 
                       function(i) rbindlist(list(sidep_prev_pcr_lst[[i]],
                                                  sidep_sero_lst[[i]],
                                                  sidep_prev_pcr_sal_mil_lst[[i]],
@@ -847,23 +828,19 @@ matching_fi = function(data_sidep){
   
   print(Sys.time()-TIME_INIT)
   
-  rm(list=setdiff(ls(),c("date_MMJJ", "date_dataset","jour_date","date_MMJJ_prev",
-                         "path","path2Git","path_sortie","path_data",
-                         "sidep_pcr","sidep_sero","sidep_pcr_sal_mil",
-                         "etapes","etapes_fin")))
   gc()
   
 }
 t1 <- Sys.time()
-prep_data(jour_date, jour_prev_update, mois=month, day_init="2020-05-20",corres=new_rattrapage,addP2=addP2)
+prep_data(jour_date, jour_prev_update, MoisAAAA=MoisAAAA,YYYY.mm = YYYY.mm, day_init="2020-05-20",corres=new_rattrapage,addP2=addP2)
 t2 <- Sys.time()
-print(t2 - t1) # 41 minutes en journÃ©e (vers 16h le 14/04/21)
+print(t2 - t1) # 41 minutes en journée (vers 16h le 14/04/21)
 print("ecriture des datas")
 t1 <- Sys.time()
 lapply(1:length(sidep_pcr),
        function(i)
          data.table::fwrite(sidep_pcr[[i]],
-                            paste0(path_sortie, date_MMJJ,'_sidep_pcr_', month[i], '.csv'),
+                            paste0(path_sortie, date_AAAAMMJJ,'_sidep_pcr_', month[i], '.csv'),
                             quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
                             qmethod = c("escape"),dateTimeAs = "ISO", verbose = F))
 t2 <- Sys.time()
@@ -874,14 +851,14 @@ sidep_sero <- rbindlist(sidep_sero, fill=T)
 sidep_pcr_sal_mil <- rbindlist(sidep_pcr_sal_mil, fill=T)
 t1 <- Sys.time()
 data.table::fwrite(sidep_sero,
-                   paste0(path_sortie, date_MMJJ,'_sidep_sero.csv'),
+                   paste0(path_sortie, date_AAAAMMJJ,'_sidep_sero.csv'),
                    quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
                    qmethod = c("escape"),dateTimeAs = "ISO", verbose = F)
 t2 <- Sys.time()
 print(t2-t1)
 t1 <- Sys.time()
 data.table::fwrite(sidep_pcr_sal_mil,
-                   paste0(path_sortie, date_MMJJ,'_sidep_pcr_salivaire_milieux_divers.csv'),
+                   paste0(path_sortie, date_AAAAMMJJ,'_sidep_pcr_salivaire_milieux_divers.csv'),
                    quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
                    qmethod = c("escape"),dateTimeAs = "ISO", verbose = F)
 t2 <- Sys.time()
@@ -890,30 +867,15 @@ print("04 TAG")
 safe_fread = purrr::quietly(data.table::fread)
 prep_data_antigenique <- function(jour=jour_date, 
                                   last_update=jour_prev_update,
-                                  mois,
-                                  noms_mois=c("2020.5",  "2020.6",  "2020.7",  "2020.8",  
-                                              "2020.9",  "2020.10", "2020.11", "2020.12",
-                                              "2021.1", "2021.2", "2021.3","2021.4"),
+                                  MoisAAAA,
+                                  YYYY.mm,
                                   day_init="2020-05-20",corres,addP2){
-  
-  month_init = lest::case_when(mois[1]=="Mai2020" ~ 5,
-                               mois[1]=="Juin2020" ~ 6,
-                               mois[1]=="Juillet2020" ~ 7,
-                               mois[1]=="Aout2020" ~ 8,
-                               mois[1]=="Septembre2020" ~ 9,
-                               mois[1]=="Octobre2020" ~ 10,
-                               mois[1]=="Novembre2020" ~11,
-                               mois[1]=="Decembre2020" ~12,
-                               mois[1]=="Janvier2021"~1,
-                               mois[1]=="Fevrier2021"~2,
-                               mois[1]=="Mars2021"~3,
-                               mois[1]=="Avril2021"~4)
   
   TIME_INIT=Sys.time()
   print(paste0("lancement: ",TIME_INIT))
   
-  date_MMJJ_last = stringr::str_replace(stringr::str_sub(as.character(last_update), start = 6L), "-", "")
-  
+  date_AAAAMMJJ_last = format(last_update,format="%Y%m%d")
+  date_AAMMJJ_last = substr(date_AAAAMMJJ_last,3,8)
   extractions = list.files(path_data)
   extractions = grep("CSV_DREES", extractions,value = T)
   extractions = grep(".csv", extractions,value = T)
@@ -925,19 +887,15 @@ prep_data_antigenique <- function(jour=jour_date,
   extractions = sort(extractions, decreasing = T)
   names(extractions) <- substr(extractions,13,16)
   
-  print("Chargement des bases journaliÃ¨res Ã  agrÃ©ger")
-  d_init = as.Date(last_update+1)
-  d_fin = jour
-  init_MMJJ = stringr::str_replace(stringr::str_sub(d_init, start = 6L), "-", "")
-  fin_MMJJ = stringr::str_replace(stringr::str_sub(d_fin, start = 6L), "-", "")
+  print("Chargement des bases journalières à agréger")
   
-  extract = extractions[substr(extractions,18,21)==init_MMJJ]
+  extract = extractions[substr(extractions,16,21)==date_AAMMJJ]
   names(extract) <- substr(extract,11,14)
   
   sidep_add_1 = safe_fread(paste0(path_data, extract["MED4"]),  quote = "",
-                           verbose = TRUE, sep = "|", header = TRUE, colClasses=list(
+                           verbose = F, sep = "|", header = TRUE, colClasses=list(
                              character = daily_files_char_vars,
-                             Integer = "Age"), encoding = "Latin-1")
+                             numeric = "Age"), encoding = "Latin-1")
   print(extract["MED4"])
   
   w <- sidep_add_1$warnings
@@ -946,9 +904,9 @@ prep_data_antigenique <- function(jour=jour_date,
   sidep_add_1 <- sidep_add_1$result
   
   sidep_add_2 = safe_fread(paste0(path_data, extract["MED2"]), quote = "",
-                           verbose = TRUE, sep = "|", header = TRUE, colClasses=list(
+                           verbose = F, sep = "|", header = TRUE, colClasses=list(
                              character = daily_files_char_vars,
-                             Integer = "Age"), encoding = "Latin-1")
+                             numeric = "Age"), encoding = "Latin-1")
   print(extract["MED2"])
   
   w <- sidep_add_2$warnings
@@ -965,7 +923,7 @@ prep_data_antigenique <- function(jour=jour_date,
   print(extract["MED2"])
   
   sidep_add <- sidep_add[AnalyseConclusion %in% c("94558-4")]
-  sidep_add$day_extract_sidep = as.Date(d_init)
+  sidep_add$day_extract_sidep = as.Date(date_AAAAMMJJ,format="%Y%m%d")
   
  
   
@@ -1016,7 +974,7 @@ prep_data_antigenique <- function(jour=jour_date,
   
   sidep_add[, regCampagneDepistage := stringr::str_extract(NumCampagneDepistage, "^[A-Za-z]{3}")]
   if (sidep_add[nchar(regCampagneDepistage)<3, .N]>0){
-    print("Probleme: il y a des trigrammes dans NumCampagneDepistage qui ont moins de 3 caractÃ¨res")
+    print("Probleme: il y a des trigrammes dans NumCampagneDepistage qui ont moins de 3 caractères")
   }
   sidep_add[, regCampagneDepistage := NULL]
   
@@ -1032,7 +990,7 @@ prep_data_antigenique <- function(jour=jour_date,
   sidep_add[, TopPrelevTA := ifelse(stringr::str_starts(FINESS_c_maj, "(RPPS|ADELI|IDNAT)"), 1, 0)]
   print(sidep_add[, table(TopPrelevTA, ProfPrelevTA)])
   if (nrow(sidep_add[TopPrelevTA == 0 & !(is.na(ProfPrelevTA)), .(FINESS_c)])>0){
-    print("Probleme il y a des top prelev TA Ã  0 alors qu'il y a une profession")
+    print("Probleme il y a des top prelev TA à 0 alors qu'il y a une profession")
   }
   
   sidep_add[, RPPSPrelevTA := stringr::str_replace(RPPSPrelevTA,'RPPS_', "")]
@@ -1067,9 +1025,6 @@ prep_data_antigenique <- function(jour=jour_date,
   }
   
   sidep_add = sidep_add[day_prelev <= day_extract_sidep]
-  
-  sidep_add = sidep_add[((month(day_prelev) >= month_init) & (lubridate::year(day_prelev) == "2020"))|
-                          (lubridate::year(day_prelev) == "2021")] 
   
   
   print("Pseudonymes")
@@ -1116,32 +1071,32 @@ prep_data_antigenique <- function(jour=jour_date,
   etapes = rbind(etapes, cbind(var="Duplicates_all_lines", n_row = nrow(sidep_add)))
   
   
-  print("Premiers symptÃ´mes")
+  print("Premiers symptômes")
   sidep_add[PremierSymptomes%in%c("","UU", "u",
-                                  "non prÃ©cisÃ©", "Non communiquÃ©",
-                                  "NON RENSEIGNE", "non renseignÃƒÂ©", "nrens",
-                                  "PAS RENSEIGNE", "NR", "Non renseignÃ©",
-                                  "NON PRECISE", "Non prÃ©cisÃ©",
-                                  "non renseignÃ©e",
+                                  "non précisé", "Non communiqué",
+                                  "NON RENSEIGNE", "non renseignÃ©", "nrens",
+                                  "PAS RENSEIGNE", "NR", "Non renseigné",
+                                  "NON PRECISE", "Non précisé",
+                                  "non renseignée",
                                   "NRENS", "np", "NCNR",
                                   "NRE","NSP","NP","NM","V",
                                   "ne sais pas", "non fait",
                                   "VOIR PRESCRIPTION JOINTE",
                                   "NPC","INC","BILAN PREOP",
                                   "?","nc","nr","0.000000",'0R',
-                                  "GAPS2","Demande annulÃ©e",
-                                  "Non communiquÃ©", "NCNR2"), 
+                                  "GAPS2","Demande annulée",
+                                  "Non communiqué", "NCNR2"), 
             PremierSymptomes:= "U"]
   sidep_add[PremierSymptomes%in%c("PAS DE SYMPTOME", "a", "Asymptomatique.",
                                   "AUCUN SYMPTOME", "asy", "APSYU", "ASy", 
                                   "ASYM","A","ASYASY","ASYM ", "ASYU", "PASYM", "UASY",
-                                  "avant entrÃ©e en EHPAD", "avant retour en EHPAD",
-                                  "entrÃ©e de geriatrie", "entree en geriatrie",
-                                  "avant rentrÃ©e en ehpad","AVANT TRANSFERT EHPAD",
+                                  "avant entrée en EHPAD", "avant retour en EHPAD",
+                                  "entrée de geriatrie", "entree en geriatrie",
+                                  "avant rentrée en ehpad","AVANT TRANSFERT EHPAD",
                                   "BILAN PRE OP", "TEST PRE OP", "TRANSFERT EN  EHPAD",
                                   "Transfert SSR-P"),
             PremierSymptomes:= "ASY"]
-  sidep_add[grepl("(Pas de symptomes)|(ASYV)|(VASY)|(PrÃ© opÃ©ratoire)|(PAS DE SYMPTOMES)|(PRE-OPERATOIRE)", PremierSymptomes), PremierSymptomes:="ASY"]
+  sidep_add[grepl("(Pas de symptomes)|(ASYV)|(VASY)|(Pré opératoire)|(PAS DE SYMPTOMES)|(PRE-OPERATOIRE)", PremierSymptomes), PremierSymptomes:="ASY"]
   sidep_add[grepl("(apparus le jour ou la veille)|(D1)|(S01S01)", PremierSymptomes), PremierSymptomes:="S01"]
   sidep_add[grepl("(apparus 2,3)|(apparus 2, 3)|(D2)|(D3)|(quelques jours)|(Quelques jours)", PremierSymptomes), PremierSymptomes:="S24"]
   sidep_add[PremierSymptomes %in% c("05/05/20"),PremierSymptomes:="S57"] #date plvt 11/05
@@ -1151,19 +1106,19 @@ prep_data_antigenique <- function(jour=jour_date,
   sidep_add[grepl("(apparus plus de 2 semaines)|(apparus plus de deux semaines)|(+ 15 jours)|(>j15)|(SS34)|(SS3SS3)|(S2-S4)", PremierSymptomes), PremierSymptomes:="SS3"]
   sidep_add[grepl("(apparus plus de deux semaines avant le prelevement)|(apparus entre 15 et 28 jours)|(SS3U)", PremierSymptomes), PremierSymptomes:="SS3"]
   sidep_add[grepl("(il y a 1 mois)|(plus de 3 semaines)|(DECEMBRE 19)|(plus de quatre semaines)|(D29)|(SP4S)",PremierSymptomes), PremierSymptomes:="SS3"]
-  sidep_add[grepl("(Eruption cutanÃ©e)|(colique)|(30/05/20)|(07/06/20)|(202005)|(202006)",PremierSymptomes), PremierSymptomes:="SNA"]
+  sidep_add[grepl("(Eruption cutanée)|(colique)|(30/05/20)|(07/06/20)|(202005)|(202006)",PremierSymptomes), PremierSymptomes:="SNA"]
   
   
   
   print("TypologiePatient")
   sidep_add[TypologiePatient == "", TypologiePatient := "U"]
   
-  sidep_add[TypologiePatient%in%c("Autre structure d'hÃ©bergement collectif",
-                                  "Autre structure d'hÃ©bergement",
-                                  "autre structure d'hÃ©bergement collectif"), 
+  sidep_add[TypologiePatient%in%c("Autre structure d'hébergement collectif",
+                                  "Autre structure d'hébergement",
+                                  "autre structure d'hébergement collectif"), 
             TypologiePatient:= "A"]
   
-  sidep_add[TypologiePatient%in%c("rÃ©sident en EHPAD","RÃ©sident en EHPAD"), 
+  sidep_add[TypologiePatient%in%c("résident en EHPAD","Résident en EHPAD"), 
             TypologiePatient:= "E"]
   sidep_add[TypologiePatient%in%c("HH"), TypologiePatient:= "H"]
   sidep_add[TypologiePatient%in%c("II","i"), TypologiePatient:= "H"]
@@ -1175,9 +1130,9 @@ prep_data_antigenique <- function(jour=jour_date,
   
   print("Resultat")
   
-  sidep_add[Resultat %in% c("negatif","NEGATIF","NÃ©gative", "N?gatif", "NN", "NNN", "NEG", "n"),
+  sidep_add[Resultat %in% c("negatif","NEGATIF","Négative", "N?gatif", "NN", "NNN", "NEG", "n"),
             Resultat := "N"]
-  sidep_add[grepl( "(ninterp)|(ndÃ©terminÃ©)", Resultat), Resultat := "I"]
+  sidep_add[grepl( "(ninterp)|(ndéterminé)", Resultat), Resultat := "I"]
   sidep_add[Resultat %in% c("PP"), Resultat := "P"]
   
   sidep_add[Resultat=='N',valeur:="N"]
@@ -1185,7 +1140,7 @@ prep_data_antigenique <- function(jour=jour_date,
   sidep_add[Resultat=='I',valeur:="I"]
   sidep_add[Resultat=='X',valeur:="X"]
   
-  print("Doublons dans les derniÃ¨res extractions")
+  print("Doublons dans les dernières extractions")
   
   
   sidep_add[, na_res := ifelse(Resultat %in% c("","X","I") | is.na(Resultat) | nchar(Resultat)>1, 1, 0)]
@@ -1234,9 +1189,9 @@ matching_fi = function(data_sidep){
   load(paste0(path, "data/utils/finess_1116.Rdata")) 
   
   liste_et <- liste_et%>%
-                select(DEP_ET=`ET-DÃ©partement\nCode`,
-                    FINESS_EJ=`EJ-NÂ°FINESS`,DEP_EJ=`EJ-DÃ©partement\nCode`,
-                    FINESS_ET=`ET-NÂ°FINESS`)
+                select(DEP_ET=`ET-Département\nCode`,
+                    FINESS_EJ=`EJ-N°FINESS`,DEP_EJ=`EJ-Département\nCode`,
+                    FINESS_ET=`ET-N°FINESS`)
   sidep_geo <- inner_join(data_sidep,
                            liste_et%>%select(fi_init=`FINESS_ET`,DEP_ET,
                                              FINESS_EJ,DEP_EJ),
@@ -1258,7 +1213,7 @@ matching_fi = function(data_sidep){
   data_sidep <- left_join(data_sidep,
                      bio3_et%>%group_by(FINESS_EJ)%>%slice(1)%>%ungroup()%>%select(FINESS_EJ,cat_etb),
                      by='FINESS_EJ')
-  data_sidep$cat_pp <- ifelse(data_sidep$cat_etb  %in% c("2000","3000"),"privÃ©",NA)
+  data_sidep$cat_pp <- ifelse(data_sidep$cat_etb  %in% c("2000","3000"),"privé",NA)
   data_sidep$cat_pp <- ifelse(data_sidep$cat_etb == "1000","public",data_sidep$cat_pp)
   table(data_sidep$cat_pp,exclude=NULL)
   data_sidep = data.table(data_sidep)
@@ -1299,7 +1254,7 @@ matching_fi = function(data_sidep){
   sidep_add=matching_fi(sidep_add)
   
   
-  print("Code postal, dÃ©partement et rÃ©gion")
+  print("Code postal, département et région")
   
   sidep_add[substr(CodePostal, 1, 2) %in% c("00", "99", "XX"), CodePostal := NA]
   sidep_add[CodePostal %in% c("", "0", ".", ",", "aucun","AUCUN"), CodePostal := NA]
@@ -1348,11 +1303,11 @@ matching_fi = function(data_sidep){
   
   
   
-  print("Professionnel de santÃ© et sexe")
+  print("Professionnel de santé et sexe")
   
-  sidep_add[ProfessionelSante%in%c("","UU", ".U", "u","Non communiquÃ©","non fait", "nr",
-                                   "Non prÃ©cisÃ©","np", "NP", "NCDD","NM","NO", "UN",
-                                   "NR","NCNR","NCNR2","Demande annulÃ©e", "Automatique"),
+  sidep_add[ProfessionelSante%in%c("","UU", ".U", "u","Non communiqué","non fait", "nr",
+                                   "Non précisé","np", "NP", "NCDD","NM","NO", "UN",
+                                   "NR","NCNR","NCNR2","Demande annulée", "Automatique"),
             ProfessionelSante:= "U"]
   sidep_add[ProfessionelSante%in%c("n","NN"), ProfessionelSante:= "N"]
   sidep_add[ProfessionelSante%in%c("OO","o"), ProfessionelSante:= "O"]
@@ -1361,7 +1316,7 @@ matching_fi = function(data_sidep){
   sidep_add[Sexe %in% c("O","","N","A"), Sexe:= "U"]
   
   
-  print("Traitement des bases journaliÃ¨res terminÃ©")
+  print("Traitement des bases journalières terminé")
   
   
   sidep_add = sidep_add[, -c("DatePrelevement", "DateValidationCR","DEP_EJ","DEP_ET", "NumDossier")]
@@ -1369,11 +1324,11 @@ matching_fi = function(data_sidep){
   
   
   
-  print("Chargement des bases agrÃ©gÃ©es") 
+  print("Chargement des bases agrégées") 
   
   
   t1 <- Sys.time()
-  path_zip_antigen = paste0(path_sortie, date_MMJJ_last, "_sidep_antigen.csv") 
+  path_zip_antigen = paste0(path_sortie, date_AAAAMMJJ_last, "_sidep_antigen.csv") 
   print(path_zip_antigen)
   sidep_prev_antigen = data.table::fread(path_zip_antigen,
                                          na.strings="",
@@ -1389,7 +1344,7 @@ matching_fi = function(data_sidep){
   print(t2-t1)
   
   
-  print("ConcatÃ©nation des bases en liste par mois")
+  print("Concaténation des bases en liste par mois")
   sidep_add[, `:=`(RPPSPrescripteur = as.character(RPPSPrescripteur))]
   data.table::setnames(sidep_add, "FINESS_c", "FINESS_PS_init")
   sidep_add[, FINESS_c_maj := NULL]
@@ -1424,7 +1379,7 @@ matching_fi = function(data_sidep){
   
   
   t1 <- Sys.time()
-  sidep_lst <- lapply(noms_mois,
+  sidep_lst <- lapply(YYYY.mm,
                       function(i) rbindlist(list(sidep_antigen_lst[[i]],
                                                  sidep_add_lst[[i]]),fill = TRUE))
   t2 <- Sys.time()
@@ -1499,34 +1454,34 @@ matching_fi = function(data_sidep){
   
   print(Sys.time()-TIME_INIT)
   
-  rm(list=setdiff(ls(),c("date_MMJJ", "date_dataset","jour_date","date_MMJJ_prev",
-                         "path","path2Git","path_sortie","path_data",
-                         "sidep_antigenique",
-                         "etapes","etapes_fin")))
   gc()
   
 }
 t1 <- Sys.time()
-prep_data_antigenique(jour_date, jour_prev_update, mois=month, day_init="2020-05-20",corres=new_rattrapage,addP2=addP2)
+prep_data_antigenique(jour_date, jour_prev_update, MoisAAAA=MoisAAAA,YYYY.mm = YYYY.mm, day_init="2020-05-20",corres=new_rattrapage,addP2=addP2)
 t2 <- Sys.time()
 print(t2 - t1) # 7 minute
 sidep_antigenique <- rbindlist(sidep_antigenique, fill=TRUE)
 t1 <- Sys.time()
 data.table::fwrite(sidep_antigenique,
-                   paste0(path_sortie, date_MMJJ,'_sidep_antigen.csv'),
+                   paste0(path_sortie, date_AAAAMMJJ,'_sidep_antigen.csv'),
                    quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
                    qmethod = c("escape"),dateTimeAs = "ISO", verbose = F)
 t2 <- Sys.time()
 print(t2-t1)
 path_config <- "src/"
 jour_date = Sys.Date()
-date_MMJJ = stringr::str_sub(as.character(jour_date), start = 6L)
-date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
-annee <- stringr::str_sub(as.character(jour_date), end = 4L)
-date_dataset = as.Date(paste0(annee, "-", substr(date_MMJJ, 1,2), "-", substr(date_MMJJ, 3, 4)))
+date_AAAAMMJJ = format(jour_date,format="%Y%m%d")
+date_AAMMJJ = substr(date_AAAAMMJJ,3,8)
+annee <- lubridate::year(jour_date)
+date_dataset = as.Date(date_AAAAMMJJ,format="%Y%m%d")
 jour_prev_update = Sys.Date()-1
-month = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020",
-         "Octobre2020", "Novembre2020", "Decembre2020", "Janvier2021", "Fevrier2021", "Mars2021","Avril2021")
+MoisAAAA = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020",
+          "Octobre2020", "Novembre2020", "Decembre2020", "Janvier2021", 
+          "Fevrier2021", "Mars2021","Avril2021")
+YYYY.mm = c("2020.5",  "2020.6",  "2020.7",  "2020.8",  
+            "2020.9",  "2020.10", "2020.11", "2020.12", "2021.1", 
+            "2021.2", "2021.3","2021.4")
 date_vars = c("day_prelev","day_valid","day_extract_sidep")
 posixct_vars = c("date_prelev","date_valid","date_valid_init")
 char_vars = c("Pseudonyme", "FINESS_ET", 
@@ -1557,10 +1512,10 @@ daily_files_char_vars = c("Pseudonyme","Pseudo1","Pseudo2","Sexe",
 new_tag_char_vars = c("RPPSPrelevTA", "AdeliPrelevTA", "idNATPrelevTA", "CPPrelevTA")
 run_expertise = T
 JP2_fromJm1P1 = F
-Jm1 = format(Sys.Date()-1,format="%m%d")
+Jm1 = format(Sys.Date()-1,format="%Y%m%d")
 check_collision_p1p2 = F
 rewrite_fichier_variants = F
-addP2 = F
+addP2 = T
 tempo="j" #j ou we
 metadata <- yaml::yaml.load_file(paste0(path_config,"config.yaml"))
 for(i in names(metadata)){
@@ -1576,7 +1531,7 @@ library(knitr)
 library(rmarkdown)
 library(kableExtra)
 library(stringi)
-library(bit64) # mieux vaut lister les package ici que dans les scripts sourcÃ©s
+library(bit64) # mieux vaut lister les package ici que dans les scripts sourcés
 library(ISOweek)
 library(lest) # ajout library pour case_when de data.table et non dplyr
 library(parallel) # ajout pour parallelisation
@@ -1585,9 +1540,9 @@ library(ggplot2)
 pathtodata = path_sortie
 replaceP1P2 = F
 if(!"sidep_pcr"%in%ls()){
-  
-  sidep_pcr = pbapply::pblapply(month,function(i) {
-    dt <- data.table::fread(paste0(pathtodata, date_MMJJ,'_sidep_pcr_', i, '.csv'),
+  print("load sidep_pcr")
+  sidep_pcr = pbapply::pblapply(MoisAAAA,function(i) {
+    dt <- data.table::fread(paste0(pathtodata, date_AAAAMMJJ,'_sidep_pcr_', i, '.csv'),
                             na.strings="",
                             colClasses=list(
                               Date=date_vars, 
@@ -1597,7 +1552,7 @@ if(!"sidep_pcr"%in%ls()){
                             verbose = F, sep = ";", header = TRUE, encoding ="Latin-1")
     if(replaceP1P2){
       n = nrow(merge(dt,new_rattrapage,by="Pseudonyme"))
-      print(sprintf("%s lignes parmi %s ont eu un p1 remplacÃ© par p2 dans le fichier %s.",n,nrow(dt),i))
+      print(sprintf("%s lignes parmi %s ont eu un p1 remplacé par p2 dans le fichier %s.",n,nrow(dt),i))
       dt[new_rattrapage,Pseudonyme:=i.Pseudo2,on="Pseudonyme"]
     }
     dt
@@ -1607,11 +1562,12 @@ if(!"sidep_pcr"%in%ls()){
   
   
 } else {
-  print("sidep_pcr dÃ©jÃ  chargÃ©")
+  print("sidep_pcr déjà chargé")
 }
 if(!"sidep_pcr_sal_mil"%in%ls()){
+  print("load sidep_pcr_sal_mil")
   
-  path_pcr_sal_mil = paste0(pathtodata, date_MMJJ, "_sidep_pcr_salivaire_milieux_divers.csv") 
+  path_pcr_sal_mil = paste0(pathtodata, date_AAAAMMJJ, "_sidep_pcr_salivaire_milieux_divers.csv") 
   print(path_pcr_sal_mil)
   sidep_pcr_sal_mil = data.table::fread(path_pcr_sal_mil, 
                                         na.strings="",
@@ -1628,11 +1584,12 @@ if(!"sidep_pcr_sal_mil"%in%ls()){
     sidep_pcr_sal_mil[new_rattrapage,Pseudonyme:=i.Pseudo2,on="Pseudonyme"]
   }
 }else {
-  print("sidep_pcr_sal_mil dÃ©jÃ  chargÃ©")
+  print("sidep_pcr_sal_mil déjà chargé")
 }
 if(!"sidep_sero"%in%ls()){
+  print("load sidep_sero")
   
-  path_sero = paste0(pathtodata, date_MMJJ, "_sidep_sero.csv") 
+  path_sero = paste0(pathtodata, date_AAAAMMJJ, "_sidep_sero.csv") 
   print(path_sero)
   sidep_sero = data.table::fread(path_sero, 
                                  na.strings="",
@@ -1649,10 +1606,11 @@ if(!"sidep_sero"%in%ls()){
     sidep_sero[new_rattrapage,Pseudonyme:=i.Pseudo2,on="Pseudonyme"]
   }
 }else {
-  print("sidep_sero dÃ©jÃ  chargÃ©")
+  print("sidep_sero déjà chargé")
 }
 if(!"sidep_antigenique"%in%ls()){
-  path_zip_antigen = paste0(pathtodata, date_MMJJ, "_sidep_antigen.csv") 
+  print("load sidep_antigenique")
+  path_zip_antigen = paste0(pathtodata, date_AAAAMMJJ, "_sidep_antigen.csv") 
   print(path_zip_antigen)
   sidep_antigenique = data.table::fread(path_zip_antigen,
                                         na.strings="",
@@ -1671,9 +1629,10 @@ if(!"sidep_antigenique"%in%ls()){
     sidep_antigenique[is.na(match_ok),match_ok:=F]
   }
 }else {
-  print("sidep_antigenique dÃ©jÃ  chargÃ©")
+  print("sidep_antigenique déjà chargé")
 }
 print("02a Nb tests")
+print(gc(verbose = T))
 library(ISOweek)
 library(lubridate)
 library(data.table)
@@ -1684,9 +1643,7 @@ library(openxlsx)
 options(scipen = 5000) # to prevent scientific notation
 nb_tests <- function(type_test,type_date,day_init,jour){
   
-  date_MMJJ = as.character(jour)
-  date_MMJJ = stringr::str_sub(date_MMJJ, start = 6L)
-  date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
+  date_AAAAMMJJ = format(jour,format="%Y%m%d")
   if(type_test=='pcr'){
     sidep <- sidep_pcr
   }else if(type_test=='sero'){
@@ -1738,9 +1695,9 @@ nb_tests <- function(type_test,type_date,day_init,jour){
              !names(nb_tests)%like%'public_nb_NA']
   nb_tests[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'public_nb']
   
-  nb_tests[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-             !names(nb_tests)%like%'privÃ©_nb_NA']
-  nb_tests[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privÃ©_nb']
+  nb_tests[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+             !names(nb_tests)%like%'privé_nb_NA']
+  nb_tests[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privé_nb']
   
   nb_tests[,NA_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests)%like%'NA_nb_P|NA_nb_N|NA_nb_I|NA_nb_X'&
              !names(nb_tests)%like%'NA_nb_NA']
@@ -1750,7 +1707,7 @@ nb_tests <- function(type_test,type_date,day_init,jour){
   nb_tests[,NA_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'NA_nb']
   
   
-  nb_tests <- nb_tests[,.(date,public_nb_tot_PNIX,privÃ©_nb_tot_PNIX,NA_nb_tot_PNIX,
+  nb_tests <- nb_tests[,.(date,public_nb_tot_PNIX,privé_nb_tot_PNIX,NA_nb_tot_PNIX,
                           nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   nb_tests_svg <- nb_tests
@@ -1768,7 +1725,7 @@ nb_tests <- function(type_test,type_date,day_init,jour){
   nb_tests_reg = merge(nb_tests_reg, reg2019[,.(reg, libelle)], by="reg", all.x=T)
   setnames(nb_tests_reg, "libelle", "nom_reg")
   nb_tests_reg = nb_tests_reg[order(nom_reg)]
-  nb_tests_reg[is.na(nom_reg),nom_reg:='RÃ©gion inconnue']
+  nb_tests_reg[is.na(nom_reg),nom_reg:='Région inconnue']
   
   
   nb_tests_reg[is.na(nb_tests_reg)]=0
@@ -1782,9 +1739,9 @@ nb_tests <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_reg)%like%'public_nb_NA']
   nb_tests_reg[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'public_nb']
   
-  nb_tests_reg[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_reg)%like%'privÃ©_nb_NA']
-  nb_tests_reg[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privÃ©_nb']
+  nb_tests_reg[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_reg)%like%'privé_nb_NA']
+  nb_tests_reg[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privé_nb']
   
   nb_tests_reg[,NA_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'NA_nb_P|NA_nb_N|NA_nb_I|NA_nb_X'&
                  !names(nb_tests_reg)%like%'NA_nb_NA']
@@ -1792,7 +1749,7 @@ nb_tests <- function(type_test,type_date,day_init,jour){
   
   nb_tests_reg[,nb_pos:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'nb_P']
   
-  nb_tests_reg <- nb_tests_reg[,.(date,nom_reg,public_nb_tot_PNIX,privÃ©_nb_tot_PNIX,NA_nb_tot_PNIX,
+  nb_tests_reg <- nb_tests_reg[,.(date,nom_reg,public_nb_tot_PNIX,privé_nb_tot_PNIX,NA_nb_tot_PNIX,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -1813,9 +1770,9 @@ nb_tests <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_dep)%like%'public_nb_NA']
   nb_tests_dep[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'public_nb']
   
-  nb_tests_dep[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_dep)%like%'privÃ©_nb_NA']
-  nb_tests_dep[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privÃ©_nb']
+  nb_tests_dep[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_dep)%like%'privé_nb_NA']
+  nb_tests_dep[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privé_nb']
   
   nb_tests_dep[,NA_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_nb_P|NA_nb_N|NA_nb_I|NA_nb_X'&
                  !names(nb_tests_dep)%like%'NA_nb_NA']
@@ -1823,7 +1780,7 @@ nb_tests <- function(type_test,type_date,day_init,jour){
   
   nb_tests_dep[,nb_pos:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'nb_P']
   
-  nb_tests_dep <- nb_tests_dep[,.(date,departement,public_nb_tot_PNIX,privÃ©_nb_tot_PNIX,NA_nb_tot_PNIX,
+  nb_tests_dep <- nb_tests_dep[,.(date,departement,public_nb_tot_PNIX,privé_nb_tot_PNIX,NA_nb_tot_PNIX,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -1847,13 +1804,12 @@ nb_tests <- function(type_test,type_date,day_init,jour){
   addStyle(wb,sheet='departements',style=createStyle(numFmt = "# ##0"),cols=c(3,4,5,6,7,9),rows=1:nrow(nb_tests_dep)+1,gridExpand=T,stack=T)
   addStyle(wb,sheet='departements',style=createStyle(numFmt = "0.0 %"),cols=c(8),rows=1:nrow(nb_tests_dep)+1,gridExpand=T,stack=T)
   
-  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/2021",date_MMJJ,"_sidep_",type_test,"_",type_date,".xlsx"),overwrite = T)
+  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/",date_AAAAMMJJ,"_sidep_",type_test,"_",type_date,".xlsx"),overwrite = T)
 }
 nb_tests_AG <- function(type_test,type_date,day_init,jour){
   
-  date_MMJJ = as.character(jour)
-  date_MMJJ = stringr::str_sub(date_MMJJ, start = 6L)
-  date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
+  date_AAAAMMJJ = format(jour,format="%Y%m%d")
+  
   
   sidep <- data.table::copy(sidep_antigenique)
   
@@ -1885,10 +1841,10 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
              !names(nb_tests)%like%'public_nb_NA']
   nb_tests[,public_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'NA_public_nb']
   
-  nb_tests[,privÃ©_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),
-           .SDcols=names(nb_tests)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-             !names(nb_tests)%like%'privÃ©_nb_NA']
-  nb_tests[,privÃ©_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'NA_privÃ©_nb']
+  nb_tests[,privé_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),
+           .SDcols=names(nb_tests)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+             !names(nb_tests)%like%'privé_nb_NA']
+  nb_tests[,privé_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'NA_privé_nb']
   
   nb_tests[,nb_pos:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'nb_P']
   
@@ -1939,20 +1895,20 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
   
   nb_tests[, verif := CHIRURGIENDENTISTE_nb_tot_PNIX + SAGEFEMME_nb_tot_PNIX + MASSEURKINESITHERAPE_nb_tot_PNIX+
              BIOLOGISTE_nb_tot_PNIX + DOCTEUR_nb_tot_PNIX + PHARMACIEN_nb_tot_PNIX + INFIRMIER_nb_tot_PNIX + 
-             MEDECIN_nb_tot_PNIX + NA_nb_tot_PNIX + privÃ©_nb_tot_PNIX + public_nb_tot_PNIX - nb_tot_PNIX]
+             MEDECIN_nb_tot_PNIX + NA_nb_tot_PNIX + privé_nb_tot_PNIX + public_nb_tot_PNIX - nb_tot_PNIX]
   
-  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catÃ©gories PNIX.")
+  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catégories PNIX.")
   
   nb_tests[, verif := CHIRURGIENDENTISTE_nb_tot + SAGEFEMME_nb_tot + MASSEURKINESITHERAPE_nb_tot+
              BIOLOGISTE_nb_tot + DOCTEUR_nb_tot + PHARMACIEN_nb_tot + INFIRMIER_nb_tot + 
-             MEDECIN_nb_tot + NA_nb_tot + privÃ©_nb_tot + public_nb_tot - nb_tot]
+             MEDECIN_nb_tot + NA_nb_tot + privé_nb_tot + public_nb_tot - nb_tot]
   
-  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catÃ©gories toute norme confondue.")
+  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catégories toute norme confondue.")
   
   nb_tests <- nb_tests[,.(date, MEDECIN_nb_tot_PNIX,PHARMACIEN_nb_tot_PNIX,INFIRMIER_nb_tot_PNIX, DOCTEUR_nb_tot_PNIX,
                           BIOLOGISTE_nb_tot_PNIX,CHIRURGIENDENTISTE_nb_tot_PNIX,SAGEFEMME_nb_tot_PNIX,
                           MASSEURKINESITHERAPE_nb_tot_PNIX,
-                          public_nb_tot_PNIX,privÃ©_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
+                          public_nb_tot_PNIX,privé_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
                           nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   nb_tests_top_prelev_ta = dcast(sidep[,.(nb_res = (.N)), 
@@ -1990,7 +1946,7 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
   nb_tests_reg = merge(nb_tests_reg, reg2019[,.(reg, libelle)], by="reg", all.x=T)
   data.table::setnames(nb_tests_reg, "libelle", "nom_reg")
   nb_tests_reg = nb_tests_reg[order(nom_reg)]
-  nb_tests_reg[is.na(nom_reg),nom_reg:='RÃ©gion inconnue']
+  nb_tests_reg[is.na(nom_reg),nom_reg:='Région inconnue']
   
   
   nb_tests_reg[is.na(nb_tests_reg)]=0
@@ -2004,9 +1960,9 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_reg)%like%'public_nb_NA']
   nb_tests_reg[,public_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'NA_public_nb']
   
-  nb_tests_reg[,privÃ©_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_reg)%like%'privÃ©_nb_NA']
-  nb_tests_reg[,privÃ©_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'NA_privÃ©_nb']
+  nb_tests_reg[,privé_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_reg)%like%'privé_nb_NA']
+  nb_tests_reg[,privé_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'NA_privé_nb']
   
   nb_tests_reg[,nb_pos:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'nb_P']
   
@@ -2062,7 +2018,7 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
                                   INFIRMIER_nb_tot_PNIX, DOCTEUR_nb_tot_PNIX,BIOLOGISTE_nb_tot_PNIX,
                                   CHIRURGIENDENTISTE_nb_tot_PNIX,SAGEFEMME_nb_tot_PNIX,
                                   MASSEURKINESITHERAPE_nb_tot_PNIX,
-                                  public_nb_tot_PNIX,privÃ©_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
+                                  public_nb_tot_PNIX,privé_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -2084,9 +2040,9 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_dep)%like%'public_nb_NA']
   nb_tests_dep[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_public_nb']
   
-  nb_tests_dep[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_dep)%like%'privÃ©_nb_NA']
-  nb_tests_dep[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_privÃ©_nb']
+  nb_tests_dep[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_dep)%like%'privé_nb_NA']
+  nb_tests_dep[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_privé_nb']
   
   nb_tests_dep[,nb_pos:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'nb_P']
   
@@ -2140,7 +2096,7 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
                                   INFIRMIER_nb_tot_PNIX, DOCTEUR_nb_tot_PNIX,BIOLOGISTE_nb_tot_PNIX,
                                   CHIRURGIENDENTISTE_nb_tot_PNIX,SAGEFEMME_nb_tot_PNIX,
                                   MASSEURKINESITHERAPE_nb_tot_PNIX,
-                                  public_nb_tot_PNIX,privÃ©_nb_tot_PNIX, NA_nb_tot,
+                                  public_nb_tot_PNIX,privé_nb_tot_PNIX, NA_nb_tot,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -2158,7 +2114,7 @@ nb_tests_AG <- function(type_test,type_date,day_init,jour){
   writeData(wb,'departements',nb_tests_dep)
   setColWidths(wb,'departements',cols=1:ncol(nb_tests_dep),widths = 12)
   
-  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/2021",date_MMJJ,"_sidep_",type_test,"_",type_date,".xlsx"),overwrite = T)
+  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/",date_AAAAMMJJ,"_sidep_",type_test,"_",type_date,".xlsx"),overwrite = T)
 }
 nb_tests(type_test='pcr',type_date='prelev',day_init='2020-05-20',jour=jour_date)
 nb_tests(type_test='pcr',type_date='valid',day_init='2020-05-24',jour=jour_date)
@@ -2168,6 +2124,8 @@ nb_tests_AG(type_test='antigenique',type_date='prelev',day_init='2020-10-16',jou
 nb_tests_AG(type_test='antigenique',type_date='valid',day_init='2020-10-16',jour=jour_date)
 nb_tests(type_test='pcr_sal_mil',type_date='prelev',day_init='2020-10-01',jour=jour_date)
 nb_tests(type_test='pcr_sal_mil',type_date='valid',day_init='2020-10-01',jour=jour_date)
+print("02a 65+")
+print(gc(verbose = T))
 library(ISOweek)
 library(lubridate)
 library(data.table)
@@ -2178,9 +2136,7 @@ library(openxlsx)
 options(scipen = 5000) # to prevent scientific notation
 nb_tests_65 <- function(type_test,type_date,day_init,jour){
   
-  date_MMJJ = as.character(jour)
-  date_MMJJ = stringr::str_sub(date_MMJJ, start = 6L)
-  date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
+  date_AAAAMMJJ = format(jour,format="%Y%m%d")
   if(type_test=='pcr'){
     sidep <- sidep_pcr
   }else if(type_test=='sero'){
@@ -2224,9 +2180,9 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
              !names(nb_tests)%like%'public_nb_NA']
   nb_tests[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'public_nb']
   
-  nb_tests[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-             !names(nb_tests)%like%'privÃ©_nb_NA']
-  nb_tests[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privÃ©_nb']
+  nb_tests[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+             !names(nb_tests)%like%'privé_nb_NA']
+  nb_tests[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'privé_nb']
   
   nb_tests[,NA_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests)%like%'NA_nb_P|NA_nb_N|NA_nb_I|NA_nb_X'&
              !names(nb_tests)%like%'NA_nb_NA']
@@ -2236,7 +2192,7 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
   nb_tests[,NA_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests)%like%'NA_nb']
   
   
-  nb_tests <- nb_tests[,.(date,public_nb_tot_PNIX,privÃ©_nb_tot_PNIX,NA_nb_tot_PNIX,
+  nb_tests <- nb_tests[,.(date,public_nb_tot_PNIX,privé_nb_tot_PNIX,NA_nb_tot_PNIX,
                           nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   nb_tests_svg <- nb_tests
@@ -2254,7 +2210,7 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
   nb_tests_reg = merge(nb_tests_reg, reg2019[,.(reg, libelle)], by="reg", all.x=T)
   setnames(nb_tests_reg, "libelle", "nom_reg")
   nb_tests_reg = nb_tests_reg[order(nom_reg)]
-  nb_tests_reg[is.na(nom_reg),nom_reg:='RÃ©gion inconnue']
+  nb_tests_reg[is.na(nom_reg),nom_reg:='Région inconnue']
   
   
   nb_tests_reg[is.na(nb_tests_reg)]=0
@@ -2268,9 +2224,9 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_reg)%like%'public_nb_NA']
   nb_tests_reg[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'public_nb']
   
-  nb_tests_reg[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_reg)%like%'privÃ©_nb_NA']
-  nb_tests_reg[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privÃ©_nb']
+  nb_tests_reg[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_reg)%like%'privé_nb_NA']
+  nb_tests_reg[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'privé_nb']
   
   nb_tests_reg[,NA_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'NA_nb_P|NA_nb_N|NA_nb_I|NA_nb_X'&
                  !names(nb_tests_reg)%like%'NA_nb_NA']
@@ -2278,7 +2234,7 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
   
   nb_tests_reg[,nb_pos:=rowSums(.SD),.SDcols=names(nb_tests_reg)%like%'nb_P']
   
-  nb_tests_reg <- nb_tests_reg[,.(date,nom_reg,public_nb_tot_PNIX,privÃ©_nb_tot_PNIX,NA_nb_tot_PNIX,
+  nb_tests_reg <- nb_tests_reg[,.(date,nom_reg,public_nb_tot_PNIX,privé_nb_tot_PNIX,NA_nb_tot_PNIX,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -2299,9 +2255,9 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_dep)%like%'public_nb_NA']
   nb_tests_dep[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'public_nb']
   
-  nb_tests_dep[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_dep)%like%'privÃ©_nb_NA']
-  nb_tests_dep[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privÃ©_nb']
+  nb_tests_dep[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_dep)%like%'privé_nb_NA']
+  nb_tests_dep[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privé_nb']
   
   nb_tests_dep[,NA_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_nb_P|NA_nb_N|NA_nb_I|NA_nb_X'&
                  !names(nb_tests_dep)%like%'NA_nb_NA']
@@ -2309,7 +2265,7 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
   
   nb_tests_dep[,nb_pos:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'nb_P']
   
-  nb_tests_dep <- nb_tests_dep[,.(date,departement,public_nb_tot_PNIX,privÃ©_nb_tot_PNIX,NA_nb_tot_PNIX,
+  nb_tests_dep <- nb_tests_dep[,.(date,departement,public_nb_tot_PNIX,privé_nb_tot_PNIX,NA_nb_tot_PNIX,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -2333,14 +2289,10 @@ nb_tests_65 <- function(type_test,type_date,day_init,jour){
   addStyle(wb,sheet='departements',style=createStyle(numFmt = "# ##0"),cols=c(3,4,5,6,7,9),rows=1:nrow(nb_tests_dep)+1,gridExpand=T,stack=T)
   addStyle(wb,sheet='departements',style=createStyle(numFmt = "0.0 %"),cols=c(8),rows=1:nrow(nb_tests_dep)+1,gridExpand=T,stack=T)
   
-  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/2021",date_MMJJ,"_sidep_",type_test,"_",type_date,"_65+.xlsx"),overwrite = T)
+  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/",date_AAAAMMJJ,"_sidep_",type_test,"_",type_date,"_65+.xlsx"),overwrite = T)
 }
 nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
-  
-  date_MMJJ = as.character(jour)
-  date_MMJJ = stringr::str_sub(date_MMJJ, start = 6L)
-  date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
-  
+  date_AAAAMMJJ = format(jour,format="%Y%m%d")
   sidep <- data.table::copy(sidep_antigenique)
   sidep = sidep[as.numeric(Age) >= 65]
   
@@ -2372,10 +2324,10 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
              !names(nb_tests)%like%'public_nb_NA']
   nb_tests[,public_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'NA_public_nb']
   
-  nb_tests[,privÃ©_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),
-           .SDcols=names(nb_tests)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-             !names(nb_tests)%like%'privÃ©_nb_NA']
-  nb_tests[,privÃ©_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'NA_privÃ©_nb']
+  nb_tests[,privé_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),
+           .SDcols=names(nb_tests)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+             !names(nb_tests)%like%'privé_nb_NA']
+  nb_tests[,privé_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'NA_privé_nb']
   
   nb_tests[,nb_pos:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests)%like%'nb_P']
   
@@ -2426,20 +2378,20 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
   
   nb_tests[, verif := CHIRURGIENDENTISTE_nb_tot_PNIX + SAGEFEMME_nb_tot_PNIX + MASSEURKINESITHERAPE_nb_tot_PNIX+
              BIOLOGISTE_nb_tot_PNIX + DOCTEUR_nb_tot_PNIX + PHARMACIEN_nb_tot_PNIX + INFIRMIER_nb_tot_PNIX + 
-             MEDECIN_nb_tot_PNIX + NA_nb_tot_PNIX + privÃ©_nb_tot_PNIX + public_nb_tot_PNIX - nb_tot_PNIX]
+             MEDECIN_nb_tot_PNIX + NA_nb_tot_PNIX + privé_nb_tot_PNIX + public_nb_tot_PNIX - nb_tot_PNIX]
   
-  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catÃ©gories PNIX.")
+  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catégories PNIX.")
   
   nb_tests[, verif := CHIRURGIENDENTISTE_nb_tot + SAGEFEMME_nb_tot + MASSEURKINESITHERAPE_nb_tot+
              BIOLOGISTE_nb_tot + DOCTEUR_nb_tot + PHARMACIEN_nb_tot + INFIRMIER_nb_tot + 
-             MEDECIN_nb_tot + NA_nb_tot + privÃ©_nb_tot + public_nb_tot - nb_tot]
+             MEDECIN_nb_tot + NA_nb_tot + privé_nb_tot + public_nb_tot - nb_tot]
   
-  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catÃ©gories toute norme confondue.")
+  if (sum(nb_tests$verif,na.rm=T)>0) print("Il y a un probleme de sommation entre les catégories toute norme confondue.")
   
   nb_tests <- nb_tests[,.(date, MEDECIN_nb_tot_PNIX,PHARMACIEN_nb_tot_PNIX,INFIRMIER_nb_tot_PNIX, DOCTEUR_nb_tot_PNIX,
                           BIOLOGISTE_nb_tot_PNIX,CHIRURGIENDENTISTE_nb_tot_PNIX,SAGEFEMME_nb_tot_PNIX,
                           MASSEURKINESITHERAPE_nb_tot_PNIX,
-                          public_nb_tot_PNIX,privÃ©_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
+                          public_nb_tot_PNIX,privé_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
                           nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   nb_tests_top_prelev_ta = dcast(sidep[,.(nb_res = (.N)), 
@@ -2477,7 +2429,7 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
   nb_tests_reg = merge(nb_tests_reg, reg2019[,.(reg, libelle)], by="reg", all.x=T)
   data.table::setnames(nb_tests_reg, "libelle", "nom_reg")
   nb_tests_reg = nb_tests_reg[order(nom_reg)]
-  nb_tests_reg[is.na(nom_reg),nom_reg:='RÃ©gion inconnue']
+  nb_tests_reg[is.na(nom_reg),nom_reg:='Région inconnue']
   
   
   nb_tests_reg[is.na(nb_tests_reg)]=0
@@ -2491,9 +2443,9 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_reg)%like%'public_nb_NA']
   nb_tests_reg[,public_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'NA_public_nb']
   
-  nb_tests_reg[,privÃ©_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_reg)%like%'privÃ©_nb_NA']
-  nb_tests_reg[,privÃ©_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'NA_privÃ©_nb']
+  nb_tests_reg[,privé_nb_tot_PNIX:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_reg)%like%'privé_nb_NA']
+  nb_tests_reg[,privé_nb_tot:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'NA_privé_nb']
   
   nb_tests_reg[,nb_pos:=rowSums(.SD,na.rm=TRUE),.SDcols=names(nb_tests_reg)%like%'nb_P']
   
@@ -2549,7 +2501,7 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
                                   INFIRMIER_nb_tot_PNIX, DOCTEUR_nb_tot_PNIX,BIOLOGISTE_nb_tot_PNIX,
                                   CHIRURGIENDENTISTE_nb_tot_PNIX,SAGEFEMME_nb_tot_PNIX,
                                   MASSEURKINESITHERAPE_nb_tot_PNIX,
-                                  public_nb_tot_PNIX,privÃ©_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
+                                  public_nb_tot_PNIX,privé_nb_tot_PNIX, NA_nb_tot,NA_nb_tot_PNIX,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -2571,9 +2523,9 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
                  !names(nb_tests_dep)%like%'public_nb_NA']
   nb_tests_dep[,public_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_public_nb']
   
-  nb_tests_dep[,privÃ©_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privÃ©_nb_P|privÃ©_nb_N|privÃ©_nb_I|privÃ©_nb_X'&
-                 !names(nb_tests_dep)%like%'privÃ©_nb_NA']
-  nb_tests_dep[,privÃ©_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_privÃ©_nb']
+  nb_tests_dep[,privé_nb_tot_PNIX:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'privé_nb_P|privé_nb_N|privé_nb_I|privé_nb_X'&
+                 !names(nb_tests_dep)%like%'privé_nb_NA']
+  nb_tests_dep[,privé_nb_tot:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'NA_privé_nb']
   
   nb_tests_dep[,nb_pos:=rowSums(.SD),.SDcols=names(nb_tests_dep)%like%'nb_P']
   
@@ -2627,7 +2579,7 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
                                   INFIRMIER_nb_tot_PNIX, DOCTEUR_nb_tot_PNIX,BIOLOGISTE_nb_tot_PNIX,
                                   CHIRURGIENDENTISTE_nb_tot_PNIX,SAGEFEMME_nb_tot_PNIX,
                                   MASSEURKINESITHERAPE_nb_tot_PNIX,
-                                  public_nb_tot_PNIX,privÃ©_nb_tot_PNIX, NA_nb_tot,
+                                  public_nb_tot_PNIX,privé_nb_tot_PNIX, NA_nb_tot,
                                   nb_tot_PNIX,nb_pos,prop_pos_PNIX,nb_tot)]
   
   
@@ -2645,8 +2597,9 @@ nb_tests_AG_65 <- function(type_test,type_date,day_init,jour){
   writeData(wb,'departements',nb_tests_dep)
   setColWidths(wb,'departements',cols=1:ncol(nb_tests_dep),widths = 12)
   
-  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/2021",date_MMJJ,"_sidep_",type_test,"_",type_date,"_65+.xlsx"),overwrite = T)
+  saveWorkbook(wb,file=paste0( "data/sorties/nb_tests/",date_AAAAMMJJ,"_sidep_",type_test,"_",type_date,"_65+.xlsx"),overwrite = T)
 }
+print(gc(verbose = T))
 nb_tests_65(type_test='pcr',type_date='prelev',day_init='2020-05-20',jour=jour_date)
 nb_tests_65(type_test='pcr',type_date='valid',day_init='2020-05-24',jour=jour_date)
 nb_tests_65(type_test='sero',type_date='prelev',day_init='2020-06-10',jour=jour_date)
@@ -2656,47 +2609,51 @@ nb_tests_AG_65(type_test='antigenique',type_date='valid',day_init='2020-10-16',j
 nb_tests_65(type_test='pcr_sal_mil',type_date='prelev',day_init='2020-10-01',jour=jour_date)
 nb_tests_65(type_test='pcr_sal_mil',type_date='valid',day_init='2020-10-01',jour=jour_date)
 print("02b")
+print(gc(verbose = T))
 stats = sidep_pcr[!is.na(day_valid)&day_valid<=as.Date(date_dataset-2),
                   .(N=(.N)), by=.(cat_pp, day_valid)]
-stats[is.na(cat_pp),cat_pp:="indÃ©terminÃ©"]
+stats[is.na(cat_pp),cat_pp:="indéterminé"]
 colnames(stats)
-colnames(stats)=c("catÃ©gorie_juridique","date_de_validation","nombre_tests_pcr")
+colnames(stats)=c("catégorie_juridique","date_de_validation","nombre_tests_pcr")
 stats = stats[order(date_de_validation)]
-write.table(stats, file=paste0( path, "data/verifs/2020",date_MMJJ,
-                               "_Nombre_tests_pcr_par_date_de_validation_et_catÃ©gorie_juridique.csv"), 
+write.table(stats, file=paste0( path, "data/verifs/",date_AAAAMMJJ,
+                               "_Nombre_tests_pcr_par_date_de_validation_et_catégorie_juridique.csv"), 
             quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
             qmethod = c("escape"))
 stats_sero = sidep_sero[!is.na(day_valid)&day_valid>=as.Date("2020-06-10")&day_valid<=as.Date(date_dataset-2),
                         .(N=(.N)), by=.(cat_pp, day_valid)]
-stats_sero[is.na(cat_pp),cat_pp:="indÃ©terminÃ©"]
+stats_sero[is.na(cat_pp),cat_pp:="indéterminé"]
 colnames(stats_sero)
-colnames(stats_sero)=c("catÃ©gorie_juridique","date_de_validation","nombre_tests_sero")
+colnames(stats_sero)=c("catégorie_juridique","date_de_validation","nombre_tests_sero")
 stats_sero = stats_sero[order(date_de_validation)]
-write.table(stats_sero, file=paste0( path, "data/verifs/2020",date_MMJJ,
-                                "_Nombre_tests_sero_par_date_de_validation_et_catÃ©gorie_juridique.csv"), 
+write.table(stats_sero, file=paste0( path, "data/verifs/",date_AAAAMMJJ,
+                                "_Nombre_tests_sero_par_date_de_validation_et_catégorie_juridique.csv"), 
             quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
             qmethod = c("escape"))
 stats$nombre_tests_pcr = as.character(stats$nombre_tests_pcr)
 stats_sero$date_de_validation = as.Date(stats_sero$date_de_validation)
-all_stats = merge(stats, stats_sero, by=c("date_de_validation","catÃ©gorie_juridique"),all.x=T)
-write.table(all_stats, file=paste0( path, "data/verifs/2020",date_MMJJ,
-                                     "_Nombre_tests_pcr_et_sero_par_date_de_validation_et_catÃ©gorie_juridique.csv"), 
+all_stats = merge(stats, stats_sero, by=c("date_de_validation","catégorie_juridique"),all.x=T)
+write.table(all_stats, file=paste0( path, "data/verifs/",date_AAAAMMJJ,
+                                     "_Nombre_tests_pcr_et_sero_par_date_de_validation_et_catégorie_juridique.csv"), 
             quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
             qmethod = c("escape"))
 list_files= list.files(path_sortie, full.names =  TRUE)
-list_files = grep(date_MMJJ, list_files,value = T)
+list_files = grep(date_AAAAMMJJ, list_files,value = T)
 list_files = grep(".csv", list_files,value = T)
+print("zip it")
+print(gc(verbose = T))
 t1 = Sys.time()
-zip::zipr(zipfile=paste0(path_sortie, date_MMJJ,'_historique_sidep.zip'),
+zip::zipr(zipfile=paste0(path_sortie, date_AAAAMMJJ,'_historique_sidep.zip'),
           files=list_files)
 t2 = Sys.time()
 difftime(t2,t1,units="mins")#27 mins !
 print("WOAW THAT IS SLOW !")
 print("07")
+print(gc(verbose = T))
 library(openxlsx)
 library(ggplot2)
 library(data.table)
-message("Il faut que la base Sidep PCR soit chargÃ©es dans l'environnement de travail")
+message("Il faut que la base Sidep PCR soit chargées dans l'environnement de travail")
 exporter_tableau_punaise <- function(donnees, onglet = "tableau1", format_donnees = "NUMBER",
                                      noms_lignes = FALSE, fichier_source = NULL, fichier_destination = NULL,
                                      colonnes_donnees = 2:(ncol(donnees)+1),
@@ -3026,10 +2983,12 @@ tab_patients_valid_65 = sidep_dedoub[as.numeric(Age) >= 65,
                                     nb_patients = .N)]
 exporter_tableau_punaise(tab_patients_valid_65, fichier_source = paste0("data/verifs/",jour,"_sidep_par_patient.xlsx"),
                          onglet = "date_valid_65")
+print("07bis")
+print(gc(verbose = T))
 library(openxlsx)
 library(ggplot2)
 library(data.table)
-message("Il faut que la base Sidep PCR soit chargÃ©e dans l'environnement de travail")
+message("Il faut que la base Sidep PCR soit chargée dans l'environnement de travail")
 exporter_tableau_punaise <- function(donnees, onglet = "tableau1", format_donnees = "NUMBER",
                                      noms_lignes = FALSE, fichier_source = NULL, fichier_destination = NULL,
                                      colonnes_donnees = 2:(ncol(donnees)+1),
@@ -3354,6 +3313,83 @@ tab_patients_valid_65 = sidep_dedoub[as.numeric(Age) >= 65,
                                        nb_patients = .N)]
 exporter_tableau_punaise(tab_patients_valid_65, fichier_source = paste0("data/verifs/",jour,"_sidep_par_patient_bis.xlsx"),
                          onglet = "date_valid_65")
+print("TAP")
+print(gc(verbose = T))
+library(dplyr)
+library(openxlsx)
+library(ggplot2)
+TABLE_RESULTATS = data.frame()
+NB_PCR = dim(sidep_pcr[as.Date(date_valid_init) >= Sys.Date() - 8 & 
+                         as.Date(date_valid_init) <= Sys.Date() - 2 & 
+                         valeur %in% c("P", "N", "I", "X")])[1]
+NB_TAG = dim(sidep_antigenique[as.Date(date_prelev) >= Sys.Date() - 8 &
+                                 as.Date(date_prelev) <= Sys.Date() - 2 & 
+                                 valeur %in% c("P", "N", "I", "X")])[1]
+dim(sidep_antigenique[as.Date(date_valid_init)== "2021-03-09" & valeur %in% c("P", "N", "I", "X")])
+NB_SALMIL = dim(sidep_pcr_sal_mil[as.Date(date_valid_init) >= Sys.Date() - 8 &
+                                    as.Date(date_valid_init) <= Sys.Date() - 2 & 
+                                    valeur %in% c("P", "N", "I", "X")])[1]
+TABLE_RESULTATS = rbind(TABLE_RESULTATS,
+                        data.frame(indicateur = "Nombre de tests",
+                                   valeur = NB_PCR + NB_TAG + NB_SALMIL))
+PART_TAG = NB_TAG / (NB_PCR + NB_TAG + NB_SALMIL)
+TABLE_RESULTATS = rbind(TABLE_RESULTATS,
+                        data.frame(indicateur = "Part des TAG",
+                                   valeur = PART_TAG))
+TABLE_RESULTATS = rbind(TABLE_RESULTATS,
+                        data.frame(indicateur = "Part des PCR (y compris salivaires)",
+                                   valeur = 1 - PART_TAG))
+FILTRE_DELAI = 10
+t1 = setDT(sidep_pcr)
+t3 = setDT(sidep_pcr_sal_mil)
+t1[, delai := as.numeric(difftime(date_valid_init, date_prelev, units="days"))]
+t3[, delai := as.numeric(difftime(date_valid_init, date_prelev, units="days"))]
+t_empilee = rbind(t1[as.Date(date_valid_init) >= Sys.Date() - 8 &
+                       as.Date(date_valid_init) <= Sys.Date() - 2 & 
+                       delai >= 0 & 
+                       delai < FILTRE_DELAI, c("delai")],
+                  t3[as.Date(date_valid_init) >= Sys.Date() - 8 &
+                       as.Date(date_valid_init) <= Sys.Date() - 2 & 
+                       delai >= 0 & 
+                       delai < FILTRE_DELAI, c("delai")]
+)
+TABLE_RESULTATS = rbind(TABLE_RESULTATS,
+                        data.frame(indicateur = "Proportion des tests rendus en moins de 24h",
+                                   valeur = sum(t_empilee$delai < 1) / dim(t_empilee)[1]))
+rm(t1, t3, t_empilee)
+t1 = sidep_pcr[!is.na(valeur) & 
+                 valeur %in% c("P", "N") & 
+                 as.Date(date_valid_init) >= Sys.Date() - 8 &
+               as.Date(date_valid_init) <= Sys.Date() - 2]
+t1[, delai := as.numeric(difftime(date_valid_init, date_prelev, units="days"))]
+t1 = t1[!is.na(delai) & 
+        delai >= 0 & 
+        delai < FILTRE_DELAI]
+t1[, symptomes := dplyr::case_when(PremierSymptomes == "ASY" ~ "Asy",
+                            PremierSymptomes == "S01" ~ "0-1",
+                            PremierSymptomes == "S24" ~ "2-4",
+                            PremierSymptomes == "S57" ~ "5-7",
+                            PremierSymptomes == "SS2" ~ "8-15",
+                            PremierSymptomes == "SS3" ~ "> 15",
+                            PremierSymptomes == "U" ~ "NR")]
+t1[, symptomes := ifelse(is.na(symptomes), "NR", symptomes)]
+t1[, symptomes_ordre := dplyr::case_when(symptomes == "Asy" ~ 1,
+                                         symptomes == "0-1" ~ 2,
+                                         symptomes == "2-4" ~ 3,
+                                         symptomes == "5-7" ~ 4,
+                                         symptomes == "8-15" ~ 5,
+                                         symptomes == "> 15" ~ 6,
+                                         symptomes == "NR" ~ 7)]
+ 
+delai_sympt_nat = t1[, .(n = .N), by = c("symptomes", "symptomes_ordre")]
+delai_sympt_nat = delai_sympt_nat[, N := sum(n)]
+delai_sympt_nat = delai_sympt_nat[, prop := n / N]
+setorder(delai_sympt_nat, symptomes_ordre)
+delai_sympt_nat = delai_sympt_nat[, c("symptomes", "prop")]
+setnames(delai_sympt_nat, c("symptomes", "prop"), c("indicateur", "valeur"))
+TABLE_RESULTATS = rbind(TABLE_RESULTATS,
+                        delai_sympt_nat)
+write.xlsx(TABLE_RESULTATS, paste0("/production/echange/sidep/codes_ccs/TAP/", Sys.Date(), " - reporting TAP.xlsx"))
 if(rewrite_fichier_variants){
   
   
@@ -3370,7 +3406,7 @@ if(rewrite_fichier_variants){
                                                   "NumCampagneDepistage","Joker1","Joker2","Joker3"),
                                     numeric = "Age"), encoding = "Latin-1")
   
-  assertthat::assert_that(sum(nchar(tab_rattrapee$Pseudonyme)!=64)==0,msg="Le Pseudonyme devrait toujours Ãªtre sur 64 caractÃ¨res")
+  assertthat::assert_that(sum(nchar(tab_rattrapee$Pseudonyme)!=64)==0,msg="Le Pseudonyme devrait toujours être sur 64 caractères")
   
   print(nrow(tab_rattrapee))
   print(nrow(merge(tab_rattrapee,new_rattrapage,by="Pseudonyme")))
@@ -3384,15 +3420,21 @@ if(rewrite_fichier_variants){
 }
 print("10")
 addP2 = F #deja fait dans les scripts 01/04 
+print("variants A")
+print(gc(verbose = T))
 path_config <- "src/"
 jour_date = Sys.Date()
-date_MMJJ = stringr::str_sub(as.character(jour_date), start = 6L)
-date_MMJJ = stringr::str_replace(date_MMJJ, "-", "")
-annee <- stringr::str_sub(as.character(jour_date), end = 4L)
-date_dataset = as.Date(paste0(annee, "-", substr(date_MMJJ, 1,2), "-", substr(date_MMJJ, 3, 4)))
+date_AAAAMMJJ = format(jour_date,format="%Y%m%d")
+date_AAMMJJ = substr(date_AAAAMMJJ,3,8)
+annee <- lubridate::year(jour_date)
+date_dataset = as.Date(date_AAAAMMJJ,format="%Y%m%d")
 jour_prev_update = Sys.Date()-1
-month = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020",
-         "Octobre2020", "Novembre2020", "Decembre2020", "Janvier2021", "Fevrier2021", "Mars2021","Avril2021")
+MoisAAAA = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020",
+          "Octobre2020", "Novembre2020", "Decembre2020", "Janvier2021", 
+          "Fevrier2021", "Mars2021","Avril2021")
+YYYY.mm = c("2020.5",  "2020.6",  "2020.7",  "2020.8",  
+            "2020.9",  "2020.10", "2020.11", "2020.12", "2021.1", 
+            "2021.2", "2021.3","2021.4")
 date_vars = c("day_prelev","day_valid","day_extract_sidep")
 posixct_vars = c("date_prelev","date_valid","date_valid_init")
 char_vars = c("Pseudonyme", "FINESS_ET", 
@@ -3423,10 +3465,10 @@ daily_files_char_vars = c("Pseudonyme","Pseudo1","Pseudo2","Sexe",
 new_tag_char_vars = c("RPPSPrelevTA", "AdeliPrelevTA", "idNATPrelevTA", "CPPrelevTA")
 run_expertise = T
 JP2_fromJm1P1 = F
-Jm1 = format(Sys.Date()-1,format="%m%d")
+Jm1 = format(Sys.Date()-1,format="%Y%m%d")
 check_collision_p1p2 = F
 rewrite_fichier_variants = F
-addP2 = F
+addP2 = T
 tempo="j" #j ou we
 metadata <- yaml::yaml.load_file(paste0(path_config,"config.yaml"))
 for(i in names(metadata)){
@@ -3441,7 +3483,7 @@ library(knitr)
 library(rmarkdown)
 library(kableExtra)
 library(stringi)
-library(bit64) # mieux vaut lister les package ici que dans les scripts sourcÃ©s
+library(bit64) # mieux vaut lister les package ici que dans les scripts sourcés
 library(ISOweek)
 library(lest) # ajout library pour case_when de data.table et non dplyr
 library(parallel) # ajout pour parallelisation
@@ -3451,14 +3493,12 @@ if(!exists("sidep_pcr")){
   TIME_INIT=Sys.time()
   print(paste0("lancement: ",TIME_INIT))
   
-  mois = c("Mai2020","Juin2020","Juillet2020","Aout2020","Septembre2020","Octobre2020", 
-           "Novembre2020", "Decembre2020", "Janvier2021", "Fevrier2021", "Mars2021","Avril2021")
   
   
   
   t1 <- Sys.time()
-  temp <- paste0(path_sortie, date_MMJJ, "_sidep_pcr_")
-  sidep_pcr <- pbapply::pblapply(mois,
+  temp <- paste0(path_sortie, date_AAAAMMJJ, "_sidep_pcr_")
+  sidep_pcr <- pbapply::pblapply(MoisAAAA,
                                  function(i) {
                                    dt <- data.table::fread(paste0(temp, i,".csv"), 
                                                            na.strings="",
@@ -3468,11 +3508,6 @@ if(!exists("sidep_pcr")){
                                                              character = char_vars, 
                                                              numeric = "Age"), 
                                                            verbose = F, sep = ";", header = TRUE, encoding ="Latin-1")
-                                   if(addP2){
-                                     n = nrow(merge(dt,corres,by="Pseudonyme"))
-                                     print(sprintf("%s lignes parmi %s ont eu un p1 remplacÃ© par p2 dans le fichier %s.",n,nrow(dt),i))
-                                     dt[corres,Pseudonyme:=i.Pseudo2,on="Pseudonyme"]
-                                   }
                                    dt
                                  }
   )
@@ -3489,7 +3524,7 @@ if(!exists("sidep_pcr")){
     )])
   
   sidep_pcr <- lapply(sidep_pcr, function(i)
-    i[grepl("priv", cat_etb ), cat_etb := "Laboratoire privÃ©"])
+    i[grepl("priv", cat_etb ), cat_etb := "Laboratoire privé"])
   
   sidep_pcr <- rbindlist(sidep_pcr, fill=T)
   t2 <- Sys.time()
@@ -3498,7 +3533,7 @@ if(!exists("sidep_pcr")){
 if(!exists("sidep_sero")){
   t1 <- Sys.time()
   
-  path_zip_sero = paste0(path_sortie, date_MMJJ, "_sidep_sero.csv") 
+  path_zip_sero = paste0(path_sortie, date_AAAAMMJJ, "_sidep_sero.csv") 
   print(path_zip_sero)
   sidep_sero = data.table::fread(path_zip_sero, 
                                  na.strings="",
@@ -3506,13 +3541,13 @@ if(!exists("sidep_sero")){
                                                  POSIXct = posixct_vars,
                                                  character = char_vars, 
                                                  numeric = "Age"),
-                                 verbose = TRUE, sep= ";", header = TRUE, encoding ="Latin-1")
+                                 verbose = F, sep= ";", header = TRUE, encoding ="Latin-1")
   t2 <- Sys.time()
   print(t2-t1)
 } else {print("sidep_sero existe deja")}
 if(!exists("sidep_pcr_sal_mil")){
   t1 <- Sys.time()
-  path_zip_pcr_sal_mil = paste0(path_sortie, date_MMJJ, "_sidep_pcr_salivaire_milieux_divers.csv") 
+  path_zip_pcr_sal_mil = paste0(path_sortie, date_AAAAMMJJ, "_sidep_pcr_salivaire_milieux_divers.csv") 
   print(path_zip_pcr_sal_mil)
   sidep_pcr_sal_mil = data.table::fread(path_zip_pcr_sal_mil, 
                                         na.strings="",
@@ -3520,13 +3555,15 @@ if(!exists("sidep_pcr_sal_mil")){
                                                         POSIXct = posixct_vars,
                                                         character = char_vars, 
                                                         numeric = "Age"),
-                                        verbose = TRUE, sep= ";", header = TRUE, encoding="Latin-1")
+                                        verbose = F, sep= ";", header = TRUE, encoding="Latin-1")
   t2 <- Sys.time()
   print(t2-t1)
 } else {print("sidep_pcr_sal_mil existe deja")}
 if(!exists("sidep_antigen_complet")){
+  
+  if(!exists("sidep_antigenique")){
   t1 <- Sys.time()
-  path_zip_antigen = paste0(path_sortie, date_MMJJ, "_sidep_antigen.csv") 
+  path_zip_antigen = paste0(path_sortie, date_AAAAMMJJ, "_sidep_antigen.csv") 
   print(path_zip_antigen)
   sidep_antigen_complet = data.table::fread(path_zip_antigen,
                                             na.strings="",
@@ -3534,8 +3571,12 @@ if(!exists("sidep_antigen_complet")){
                                                             POSIXct = posixct_vars,
                                                             character = c(char_vars,new_tag_char_vars), 
                                                             numeric = "Age"),
-                                            verbose = TRUE, sep= ";", header = TRUE, encoding = "Latin-1")
+                                            verbose = F, sep= ";", header = TRUE, encoding = "Latin-1")
   t2 <- Sys.time()
   print(t2-t1)
+  } else {
+    sidep_antigen_complet = sidep_antigenique
+    rm(sidep_antigenique);gc()
+  }
 } else {print("sidep_antigen_complet existe deja")}
 

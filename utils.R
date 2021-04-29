@@ -1,5 +1,5 @@
 
-error_get_missing_var = function(e, env, missing_vars, verbose = 0) {
+error_get_missing_var = function(e, env, missing_vars, verbose = 0,funs_defs) {
   
   curr_script = get("curr_script",envir=env)
   dirpath = get("dirpath",envir=env)
@@ -20,22 +20,26 @@ error_get_missing_var = function(e, env, missing_vars, verbose = 0) {
       env = env,
       takelast = F,
       missing_vars = missing_vars,
-      verbose = verbose >0
+      verbose = verbose >0,
+      funs_defs=funs_defs
     )
     get_def = res_list[['def']]
-    i = res_list[['i']]
+    pos_non_autoref = res_list[['pos_non_autoref']]
     # browser()
     if(!is.null(get_def)){#multiple definitions found !
-      if(length(get_def)>1 & i > 0){
+      if(length(get_def)>1 & pos_non_autoref > 0){
         # browser()
         # print("get near-call definition.")
-        n = find_one_call_line(one_call,file.path(dirpath,curr_script))
+        # n = find_one_call_line(one_call,file.path(dirpath,curr_script))
+        n = find_one_call_line(one_call,"full_code_unnest_fun_calls.R")
         # if(!(length(n)==1 && is.numeric(n)))browser()
         
         unnest_source(final_script = curr_script,dirpath = dirpath,
                       n = n,#a priori on prendrait n-1 mais comme le reader peut être à l'intérieur d'une expression {} il faut récupérer tout le contenu car la définition de la variable peut se trouver dans l'expression
                       destfile = "tmp.R",verbose = verbose>1)
-        
+        unnest_funs_in_script(filepath = "tmp.R",
+                    destfile = "tmp.R",
+                    funs_defs = funs_defs)
         n = find_one_call_line(one_call,"tmp.R")
         
         # message(missing_var)
@@ -46,9 +50,10 @@ error_get_missing_var = function(e, env, missing_vars, verbose = 0) {
           dirpath = ".",
           takelast = T,
           missing_vars = missing_vars,
-          verbose = verbose>0
+          verbose = verbose>0,
+          funs_defs=funs_defs
         )
-      } else if (length(get_def) == 1 | i == 0) {
+      } else if (length(get_def) == 1 | pos_non_autoref == 0) {
         # eval(get_def[[1]],envir = parent.frame())
         # tryCatch({
         missing_var_value <-  get(missing_var, envir = env)
@@ -126,28 +131,37 @@ get_code = function(filepath,dirpath="../sidep/",n=-1L,verbose=F){
 
 base_types = c("name","character","numeric","logical","integer")
 
-get_var_def_one_call = function(one_call,my_var,verbose=F){
-  if(length(one_call) > 1 && ((one_call[[1]] == "=") | (one_call[[1]] == "<-")) && (one_call[[2]] == my_var)){
-    if(verbose)print("found one definition !")
-    
-    return(one_call)
-  }
+get_var_def_one_call = function(one_call,my_var,verbose=F,funs_defs){
   
-  if(length(one_call) > 1 && (one_call[[1]] == "for") && (one_call[[2]] == my_var)){
-    if(verbose)print("found one \"for\" definition !")
-    
-    res1 = parse(text = paste0(one_call[[2]]," = ",one_call[[3]]))#rebuild for(x in X) as x = X 
-    
-    sub_item = one_call[[4]]
-    if(class(sub_item)=="{"){
-      sub_item = sub_item[-1]
-      sub_item = sapply(1:length(sub_item), function(i) {
-        sub_item[[i]]
-      })
+  if(length(one_call) > 1){
+    if(((one_call[[1]] == "=") | (one_call[[1]] == "<-") | (one_call[[1]] == "<<-")) && (one_call[[2]] == my_var)){
+      if(verbose)print("found one definition !")
+      
+      return(one_call)
     }
-    res <- lapply(sub_item,get_var_def_one_call,my_var=my_var,verbose=verbose)
     
-    return(list(res1,res))
+    if((one_call[[1]] == "for") && (one_call[[2]] == my_var)){
+      if(verbose)print("found one \"for\" definition !")
+      
+      res1 = parse(text = paste0(one_call[[2]]," = ",one_call[[3]]))#rebuild for(x in X) as x = X 
+      
+      sub_item = one_call[[4]]
+      if(class(sub_item)=="{"){
+        sub_item = sub_item[-1]
+        sub_item = sapply(1:length(sub_item), function(i) {
+          sub_item[[i]]
+        })
+      }
+      res <- lapply(sub_item,get_var_def_one_call,my_var=my_var,verbose=verbose,funs_defs=funs_defs)
+      
+      return(list(res1,res))
+    }
+    
+    if(!is.null(funs_defs) && (class(one_call)=="call" & as.character(one_call[[1]]) %in% names(funs_defs))){
+      new_item = deeply_unnest_fun_call(one_call,funs_defs=funs_defs)
+      res <- lapply(new_item,get_var_def_one_call,my_var=my_var,verbose=verbose,funs_defs=funs_defs)
+      return(res)
+    }
   }
   
   
@@ -180,7 +194,7 @@ get_var_def_one_call = function(one_call,my_var,verbose=F){
       
       
       tryCatch({
-        res <- get_var_def_one_call(sub_item,my_var = my_var,verbose=verbose)
+        res <- get_var_def_one_call(sub_item,my_var = my_var,verbose=verbose,funs_defs=funs_defs)
       },error=function(e){browser()})
       
       
@@ -199,7 +213,7 @@ get_var_def_one_call = function(one_call,my_var,verbose=F){
       #   res = c(res,get_var_def_one_call(sub_item[[j]],my_var = my_var))
       # }
       tryCatch({
-        res <- lapply(sub_item,get_var_def_one_call,my_var=my_var,verbose=verbose)
+        res <- lapply(sub_item,get_var_def_one_call,my_var=my_var,verbose=verbose,funs_defs=funs_defs)
       },error=function(e){browser()})
       
       
@@ -212,7 +226,7 @@ get_var_def_one_call = function(one_call,my_var,verbose=F){
       }
       
       tryCatch({
-        res <- get_var_def_one_call(sub_item,my_var = my_var,verbose=verbose)
+        res <- get_var_def_one_call(sub_item,my_var = my_var,verbose=verbose,funs_defs=funs_defs)
         # res <- lapply(sub_item,get_var_def_one_call,my_var=my_var)
       },error=function(e){browser()})
       
@@ -222,35 +236,39 @@ get_var_def_one_call = function(one_call,my_var,verbose=F){
   })
 }
 
-get_var_def_one_script = function(script,my_var,dirpath,verbose=F){
+get_var_def_one_script = function(script,my_var,dirpath,verbose=F,funs_defs){
   # f = "../sidep/src/01_Nettoyage_sidep_pcr - catch warning.R"
   if(verbose)print(script)
-  f = file(file.path(dirpath,script),encoding="UTF-8")
-  tryCatch({sc <- parse(file=f)},
-           error=function(e){
-             print(sprintf("couldn't parse file %s",script))
-             
-             print(length(readLines(f)))
-             
-             browser()
-           })
+  
+  #Double tentative de lecture : d'abord avec le nom du fichier puis avec une connexion UTF-8
+  
+  OK = F
+  f = file.path(dirpath,script)
+  tryCatch({
+    sc <- parse(file = f)
+    OK = T
+  },
+  error=function(e){
+    print(sprintf("couldn't parse file %s with file.path",script))
+    # print(length(readLines(f)))
+    # browser()
+  })
+  if(!OK){
+    f = file(file.path(dirpath,script),encoding="UTF-8")
+    tryCatch({
+      sc <- parse(file = f)
+      OK = T
+    },
+    error=function(e){
+      print(sprintf("couldn't parse file %s with file(file.path,UTF8)",script))
+      print(length(readLines(f)))
+      browser()
+    })
+  }
   
   
-  vars_definitions = lapply(sc,get_var_def_one_call,my_var=my_var,verbose=verbose)
+  vars_definitions = lapply(sc,get_var_def_one_call,my_var=my_var,verbose=verbose,funs_defs=funs_defs)
   vars_definitions = purrr::compact(vars_definitions)
-  # one_call = sc[[1]]
-  # class(sc)
-  # class(sc[[1]])
-  # 
-  # sc = CodeDepends::readScript(f)
-  # vars_definitions = sc@.Data
-  # 
-  # lapply(vars_definitions,function(x)x[[2]])
-  # vars_definitions = purrr::keep(vars_definitions, function(x) {
-  #   if(length(x)>1){
-  #     x[[2]] == my_var
-  #   } else F
-  # })
   vars_definitions
 }
 
@@ -260,8 +278,9 @@ get_var_def = function(scripts,
                        env = parent.frame(),
                        takelast = T,
                        verbose = 0,
-                       missing_vars = list()) {
-  res = lapply(scripts,get_var_def_one_script,my_var=my_var,dirpath=dirpath,verbose=verbose>1)
+                       missing_vars = list(),
+                       funs_defs=NULL) {
+  res = lapply(scripts,get_var_def_one_script,my_var=my_var,dirpath=dirpath,verbose=verbose>1,funs_defs=funs_defs)
   names(res) <- scripts
   res = unlist(res)
   
@@ -280,11 +299,11 @@ get_var_def = function(scripts,
     # Si on a dû remonter jusqu'à la première, alors on bypass le param takelast 
     
     res
-    i = length(res)
-    # i = i-1
+    pos_non_autoref = length(res)
+    # pos_non_autoref = pos_non_autoref-1
     need_self = 1
-    while(i>0 & need_self == 1){
-      my_expr = res[[i]]
+    while(pos_non_autoref>0 & need_self == 1){
+      my_expr = res[[pos_non_autoref]]
       here = environment()
       tryCatch({
         eval(my_expr)
@@ -301,24 +320,24 @@ get_var_def = function(scripts,
           }
         }
       })
-      i = i-1
+      pos_non_autoref = pos_non_autoref-1
     }
     
-    if(i==0 & need_self == 1){
+    if(pos_non_autoref==0 & need_self == 1){
       print("on n'a pas trouvé de définition sans auto-référence")
       browser()
     } 
     
     
-    if(takelast | i==0){
-      res = res[(i+1):length(res)]
+    if(takelast | pos_non_autoref==0){
+      res = res[(pos_non_autoref+1):length(res)]
     }
     if(length(unique(res))==1){
       res = res[1]
     }
     
     
-    if(takelast | i==0 | length(res)==1){
+    if(takelast | pos_non_autoref==0 | length(res)==1){
       for(k in 1:length(res)){
         print(sprintf("Evaluation de l'expression %s / %s pour récupérer la variable %s.",k,length(res),my_var))
         had_error = T
@@ -340,7 +359,7 @@ get_var_def = function(scripts,
             had_error = F
             
           }, 
-          error = function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose)
+          error = function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose,funs_defs=funs_defs)
           )
           
           if(had_error){
@@ -350,7 +369,7 @@ get_var_def = function(scripts,
               assign(my_var,get(my_var,envir = env),envir = here)#get it from the env to here
               had_error = F
             }, 
-            error = function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose)
+            error = function(e)error_get_missing_var(e,env=env,missing_vars=missing_vars,verbose=verbose,funs_defs=funs_defs)
             )
           }
           
@@ -369,12 +388,13 @@ get_var_def = function(scripts,
     # browser()
   } else {
     res=NULL
+    browser()
     message(sprintf("Aucune définition trouvée pour %s",my_var))
-    def = paste(text=paste0(my_var," = ",my_var))
+    def = paste(text=paste0(my_var," = \"",my_var,"\""))
     eval(def,envir=env)
     # browser()
   } 
-  invisible(list(def=res,i=i))
+  invisible(list(def=res,pos_non_autoref=pos_non_autoref))
 }
 
 
@@ -389,6 +409,15 @@ standardize_code = function(code){
   code
 }
 
+# AJOUTER UN CONCEPT SIMILAIRE AUX SOURCES : FUNCTIONS AVEC DISTINCTION ENTRE DEFINITION ET APPEL
+# 
+# SOURCE1 -> SOURCE2 -> DEF/FUN1
+# SOURCE1 <- CALL/FUN1
+# FUN1 -> WRITE FILE1
+# FUN1 <- READ FILE0
+# SINON CA N'A PAS D'INTERET CAR TOUT SE PASSE DANS 00_actu
+
+REWRITE GET_VAR_DEF WITH THE SAME PARSING APPROACH !
 
 find_one_call_line = function(one_call,curr_script){
   code = readLines(curr_script,encoding = "UTF-8")
@@ -396,22 +425,22 @@ find_one_call_line = function(one_call,curr_script){
   std_call = strsplit(std_call,split = "\n",fixed = T)[[1]]
   code = standardize_code(code)
   res = grep(std_call[1],code,fixed = T)
-  if(length(res) == 0){
-    matching_call = std_call[1]
-    # compact_code = paste(code,collapse="")
-    # res = grep(matching_call,compact_code,fixed = T)
-    size_expr = nchar(matching_call)
-    print(size_expr)
-    while(length(res)==0 && size_expr>4){
-      size_expr = size_expr-1
-      matching_call = substr(matching_call,1,size_expr)
-      res = grep(matching_call,code,fixed = T)
-    }
-    if(length(res)>0){
-      print(sprintf("On a finalement réduit la première ligne du call aux %s premiers chars.",size_expr))
-    }
-    
-  } 
+  # if(length(res) == 0){
+  #   matching_call = std_call[1]
+  #   # compact_code = paste(code,collapse="")
+  #   # res = grep(matching_call,compact_code,fixed = T)
+  #   size_expr = nchar(matching_call)
+  #   print(size_expr)
+  #   while(length(res)==0 && size_expr>10){
+  #     size_expr = size_expr-1
+  #     matching_call = substr(matching_call,1,size_expr)
+  #     res = grep(matching_call,code,fixed = T)
+  #   }
+  #   if(length(res)>0){
+  #     print(sprintf("On a finalement réduit la première ligne du call aux %s premiers chars.",size_expr))
+  #   }
+  #   
+  # } 
   if(length(res) == 0){
     print("on n'a pas réussi à retrouver one_call dans curr_script...")
     print(one_call)
