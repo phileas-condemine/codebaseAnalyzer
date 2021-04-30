@@ -56,13 +56,41 @@ get_io_one_call = function(one_call,io_fun,file_arg,curr_script,dirpath,missing_
   } else if (!file_arg %in% names(cc_list) && eefun=="saveWorkbook") {
     print("arg is not parsed for saveWorkbook => hardcoded to 2nd arg")
     iopath = cc_list[[3]]
-  }  else if (!file_arg %in% names(cc_list) && eefun=="write.csv") {
+  } else if (!file_arg %in% names(cc_list) && eefun=="load") {
+    print("arg is not parsed for load => hardcoded to 1st arg")
+    iopath = cc_list[[2]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="loadWorkbook") {
+    print("arg is not parsed for loadWorkbook => hardcoded to 1st arg")
+    iopath = cc_list[[2]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="fread") {
+    print("arg is not parsed for fread => hardcoded to 1st arg")
+    iopath = cc_list[[2]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="read_excel") {
+    print("arg is not parsed for read_excel => hardcoded to 1st arg")
+    iopath = cc_list[[2]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="read.xlsx") {
+    print("arg is not parsed for read.xlsx => hardcoded to 1st arg")
+    iopath = cc_list[[2]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="fwrite") {
+    print("arg is not parsed for fwrite => hardcoded to 2nd arg")
+    iopath = cc_list[[3]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="write.csv") {
     print("arg is not parsed for write.csv => hardcoded to 2nd arg")
     iopath = cc_list[[3]]
+  } else if (!file_arg %in% names(cc_list) && eefun=="read_fst") {
+    print("arg is not parsed for read_fst => hardcoded to 1st arg")
+    iopath = cc_list[[2]]
   } else {
     iopath = cc_list[[file_arg]]
   }
-  parsed_fun = cc_list[[1]]
+  
+  if(is.null(iopath)){
+    cc_list
+    names(cc_list)
+    length(cc_list)
+    browser()
+  }
+  parsed_fun = no_pkg(deparse(cc_list[[1]]))
   print(parsed_fun)
   if(parsed_fun=="::"){
     print("package::fun not handled")

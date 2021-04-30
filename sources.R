@@ -48,7 +48,13 @@ get_all_sources = function(parentpath = "src/00_Actualisation_pcr_sero.R",verbos
 }
 
 
-unnest_source = function(mainfile="src/00_Actualisation_pcr_sero.R",dirpath="../sidep/",final_script=NULL,n=-1L,path="../sidep/",verbose=F,destfile = NULL){
+unnest_source = function(mainfile = "src/00_Actualisation_pcr_sero.R",
+                         dirpath = "../sidep/",
+                         final_script = NULL,
+                         n = -1L,
+                         path = "../sidep/",
+                         verbose = F,
+                         destfile = NULL) {
   if(!is.null(final_script) && mainfile == final_script){
     code = get_code(mainfile,dirpath,n=n,verbose=verbose)
   } else {
@@ -106,7 +112,7 @@ unnest_source = function(mainfile="src/00_Actualisation_pcr_sero.R",dirpath="../
 
 
 find_funs_defs = function(full_code_path = "full_code.R"){
-  parsed_code = parse("full_code.R")
+  parsed_code = parse(full_code_path)
   
   funs_loc = grep("function",parsed_code)
   funs_defs = parsed_code[funs_loc]

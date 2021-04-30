@@ -840,7 +840,7 @@ t1 <- Sys.time()
 lapply(1:length(sidep_pcr),
        function(i)
          data.table::fwrite(sidep_pcr[[i]],
-                            paste0(path_sortie, date_AAAAMMJJ,'_sidep_pcr_', month[i], '.csv'),
+                            paste0(path_sortie, date_AAAAMMJJ,'_sidep_pcr_', MoisAAAA[i], '.csv'),
                             quote=TRUE,dec=".", row.names=FALSE, col.names=TRUE, sep =";",
                             qmethod = c("escape"),dateTimeAs = "ISO", verbose = F))
 t2 <- Sys.time()
@@ -4245,9 +4245,13 @@ if (!paste0(Sys.Date(), " - table_pour_carto.csv") %in% dir("data/sorties/varian
                           delta = F,
                           reverse_delta = T){
     
+    
     multiplie = function(x) {return(x * coefficient)}
     
     names(data) = c("departement", "valeur")
+    
+    data[is.infinite(valeur), valeur := NA]
+    
     carte_dep <- merge(carte_dep,
                        data,
                        by.x = "CC_2",

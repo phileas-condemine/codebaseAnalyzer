@@ -420,6 +420,7 @@ get_inline_io_fun_pattern = function(io_fun){
 
 standardize_code = function(code){
   code = gsub(" ","",code)
+  code = gsub("'","\"",code)
   # code = gsub("\n","",code)
   code
 }
@@ -436,28 +437,28 @@ find_one_call_line = function(one_call,curr_script){
   grepl(compact_call,compact_code,fixed = T)
   
   res = grep(std_call[1],code,fixed = T)
-  # if(length(res) == 0){
-  #   matching_call = std_call[1]
-  #   # compact_code = paste(code,collapse="")
-  #   # res = grep(matching_call,compact_code,fixed = T)
-  #   size_expr = nchar(matching_call)
-  #   print(size_expr)
-  #   # while(length(res)==0 && size_expr>4){
-  #   #   size_expr = size_expr-1
-  #   #   matching_call = substr(matching_call,1,size_expr)
-  #   #   res = grep(matching_call,code,fixed = T)
-  #   # }
-  #   if(length(res)>0){
-  #     print(sprintf("On a finalement réduit la première ligne du call aux %s premiers chars.",size_expr))
-  #   }
-  #   
-  # } 
+  if(length(res) == 0){
+    matching_call = std_call[1]
+    # compact_code = paste(code,collapse="")
+    # res = grep(matching_call,compact_code,fixed = T)
+    size_expr = nchar(matching_call)
+    print(size_expr)
+    while(length(res)==0 && size_expr>9){
+      size_expr = size_expr-1
+      matching_call = substr(matching_call,1,size_expr)
+      res = grep(matching_call,code,fixed = T)
+    }
+    if(length(res)>0){
+      print(sprintf("On a finalement réduit la première ligne du call aux %s premiers chars.",size_expr))
+    }
+
+  }
   if(length(res) == 0){
     print("on n'a pas réussi à retrouver one_call dans curr_script...")
     print(one_call)
     print(curr_script)
     browser()
-    
+    # return(NA)
   } else {
     if(length(std_call)==1 & length(res) == 1){
       #cas facile
