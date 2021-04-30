@@ -241,6 +241,7 @@ v <- create_network(dt = dt) %>%
 
 v
 visNetwork::visSave(v,"network_prod_sidep_etoile.html")
+visNetwork::visSave(v,"index.html")
 # visConfigure(v,enabled = T)
 v <- visHierarchicalLayout(v)
 
