@@ -215,7 +215,7 @@ v <- create_network(dt = dt) %>%
   highlightNearest = list(enabled =TRUE, degree = 1, hover = T),
   nodesIdSelection = TRUE
 )  %>%
-  visInteraction(hover = T,tooltipDelay = 50,tooltipStay = 1000) %>%
+  visInteraction(hover = T,tooltipDelay = 50,tooltipStay = 10000) %>%
   visNodes(font=list("size"=0))
 # %>%
 #   visEvents(hoverNode  = "function(e){
