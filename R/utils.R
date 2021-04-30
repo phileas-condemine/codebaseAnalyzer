@@ -10,7 +10,7 @@ error_get_missing_var = function(e, env, missing_vars, verbose = 0,funs_defs) {
   msg = grep("^objet .* introuvable$",msg,value = T)
   if(length(msg)>0){
     missing_var = gsub("(^objet ')|(' introuvable$)","",msg)
-    write(missing_var,file = "all_missing_vars.txt",append = T)
+    write(missing_var,file = "data/all_missing_vars.txt",append = T)
     
     message(sprintf("search missing var : %s",missing_var))
     # print("look for definition in the entire codebase")
@@ -35,13 +35,13 @@ error_get_missing_var = function(e, env, missing_vars, verbose = 0,funs_defs) {
         
         unnest_source(final_script = curr_script,dirpath = dirpath,
                       n = n,#a priori on prendrait n-1 mais comme le reader peut être à l'intérieur d'une expression {} il faut récupérer tout le contenu car la définition de la variable peut se trouver dans l'expression
-                      destfile = "tmp.R",verbose = verbose>1)
+                      destfile = "data/tmp.R",verbose = verbose>1)
         
-        n = find_one_call_line(one_call,"tmp.R")
+        n = find_one_call_line(one_call,"data/tmp.R")
         
         # message(missing_var)
         res_list = get_var_def(
-          scripts = "tmp.R",
+          scripts = "data/tmp.R",
           my_var = missing_var,
           env = env,
           dirpath = ".",
@@ -97,10 +97,10 @@ get_code = function(filepath,dirpath="../sidep/",n=-1L,verbose=F){
     # print(n)
     code = readLines(file.path(dirpath,filepath),encoding = "UTF-8",n = n,warn = verbose)
     writeLines(text = c(code, ""),#final empty line
-               con = file("tmp.R", encoding = "UTF-8"))
+               con = file("data/tmp.R", encoding = "UTF-8"))
     res = NULL
     try({
-      res = parse(file = file("tmp.R",encoding = "UTF-8"))
+      res = parse(file = file("data/tmp.R",encoding = "UTF-8"))
     },silent = T)
     
     if(is.null(res)){

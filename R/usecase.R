@@ -81,7 +81,7 @@ codes_path = unique(c(code_architecture$parent,code_architecture$child))
 my_var="safe_fread"
 get_var_def(scripts = codes_path,my_var = my_var)
 
-unnest_source(destfile = "full_code.R")
+unnest_source(destfile = "data/full_code.R")
 
 funs_defs = find_funs_defs()
 
@@ -200,7 +200,7 @@ dt[dedup_expr,parent:=i.std,on=c("parent"="raw")]
 # all_outputs[dedup_expr,child:=i.std,on=c("child"="raw")]
 
 
-all_missing_vars = readLines("all_missing_vars.txt")
+all_missing_vars = readLines("data/all_missing_vars.txt")
 all_missing_vars = unique(all_missing_vars)
 all_missing_vars
 
@@ -240,10 +240,10 @@ v <- create_network(dt = dt) %>%
 #             }")
 
 v
-visNetwork::visSave(v,"network_prod_sidep_etoile.html")
+visNetwork::visSave(v,"output/network_prod_sidep_etoile.html")
 visNetwork::visSave(v,"index.html",selfcontained = T)
 # visConfigure(v,enabled = T)
 v <- visHierarchicalLayout(v)
 
-visNetwork::visSave(v,"network_prod_sidep_hierarchie.html")
+visNetwork::visSave(v,"output/network_prod_sidep_hierarchie.html")
 

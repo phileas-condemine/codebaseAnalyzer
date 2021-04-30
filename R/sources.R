@@ -111,7 +111,7 @@ unnest_source = function(mainfile = "src/00_Actualisation_pcr_sero.R",
 }
 
 
-find_funs_defs = function(full_code_path = "full_code.R"){
+find_funs_defs = function(full_code_path = "data/full_code.R"){
   parsed_code = parse(full_code_path)
   
   funs_loc = grep("function",parsed_code)
